@@ -42,21 +42,122 @@ local Window = Library:CreateWindow({
     ShowMobileButtons = false,
 })
 
--- Universal "EXE HUB" Floating Toggle Button (Visible on all devices: PC & Mobile)
-local ExeHubFloatingButton = Library:AddDraggableButton("EXE HUB", function()
-    Library:Toggle()
+-- Toggle UI Function: Safely shows or hides the main window on any device
+local function toggleUI()
+    if Window and Window.MainFrame then
+        local newState = not Window.MainFrame.Visible
+        Window.MainFrame.Visible = newState
+        Library.Toggled = newState
+        pcall(function()
+            if Window.Toggle then
+                Window:Toggle(newState)
+            end
+        end)
+    elseif Library.Toggle then
+        pcall(function() Library:Toggle() end)
+    end
+end
+
+-- Universal "EXE HUB" Floating Toggle Button (Visible & Draggable on ALL devices)
+local FloatingToggleGui = Instance.new("TextButton")
+FloatingToggleGui.Name = "EXEHUB_FloatingToggle"
+FloatingToggleGui.Text = "EXE HUB"
+FloatingToggleGui.Font = Enum.Font.GothamBold
+FloatingToggleGui.TextSize = 13
+FloatingToggleGui.TextColor3 = Color3.fromRGB(255, 255, 255)
+FloatingToggleGui.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
+FloatingToggleGui.Size = UDim2.fromOffset(80, 32)
+FloatingToggleGui.Position = UDim2.new(0, 18, 0, 75)
+FloatingToggleGui.ZIndex = 2000
+FloatingToggleGui.AutoButtonColor = false
+FloatingToggleGui.Parent = Library.ScreenGui or (Library.Floats and Library.Floats.Parent) or game:GetService("CoreGui")
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 8)
+toggleCorner.Parent = FloatingToggleGui
+
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = Color3.fromRGB(65, 65, 80)
+toggleStroke.Thickness = 1.2
+toggleStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+toggleStroke.Parent = FloatingToggleGui
+
+-- Hover effects
+FloatingToggleGui.MouseEnter:Connect(function()
+    toggleStroke.Color = Color3.fromRGB(130, 130, 160)
+    FloatingToggleGui.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
+end)
+FloatingToggleGui.MouseLeave:Connect(function()
+    toggleStroke.Color = Color3.fromRGB(65, 65, 80)
+    FloatingToggleGui.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
 end)
 
-if ExeHubFloatingButton and ExeHubFloatingButton.Button then
-    ExeHubFloatingButton.Button.Position = UDim2.new(0, 20, 0, 60)
-    ExeHubFloatingButton.Button.ZIndex = 50
+-- Draggable + Tap detection for both Touch and Mouse
+do
+    local isDragging = false
+    local dragStart = nil
+    local startPos = nil
+    local hasDragged = false
+    local lastToggleTick = 0
+
+    local function onButtonTap()
+        if tick() - lastToggleTick < 0.25 then return end
+        lastToggleTick = tick()
+        toggleUI()
+    end
+
+    FloatingToggleGui.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            isDragging = true
+            hasDragged = false
+            dragStart = input.Position
+            startPos = FloatingToggleGui.Position
+
+            local moveConn
+            local endConn
+
+            moveConn = UserInputService.InputChanged:Connect(function(moveInput)
+                if not isDragging then return end
+                if moveInput.UserInputType == Enum.UserInputType.MouseMovement or moveInput.UserInputType == Enum.UserInputType.Touch then
+                    local delta = moveInput.Position - dragStart
+                    if delta.Magnitude > 6 then
+                        hasDragged = true
+                        FloatingToggleGui.Position = UDim2.new(
+                            startPos.X.Scale,
+                            startPos.X.Offset + delta.X,
+                            startPos.Y.Scale,
+                            startPos.Y.Offset + delta.Y
+                        )
+                    end
+                end
+            end)
+
+            endConn = UserInputService.InputEnded:Connect(function(endInput)
+                if endInput.UserInputType == Enum.UserInputType.MouseButton1 or endInput.UserInputType == Enum.UserInputType.Touch then
+                    isDragging = false
+                    if moveConn then moveConn:Disconnect() end
+                    if endConn then endConn:Disconnect() end
+
+                    if not hasDragged then
+                        onButtonTap()
+                    end
+                end
+            end)
+        end
+    end)
+
+    FloatingToggleGui.Activated:Connect(function()
+        if not hasDragged then
+            onButtonTap()
+        end
+    end)
 end
 
 -- Remove default mobile Toggle and Lock buttons so only our EXE HUB button is active
 pcall(function()
     if Library.Floats then
         for _, child in ipairs(Library.Floats:GetChildren()) do
-            if child:IsA("GuiObject") and child ~= Library.KeybindFrame and (not ExeHubFloatingButton or child ~= ExeHubFloatingButton.Button) then
+            if child:IsA("GuiObject") and child ~= Library.KeybindFrame then
                 local label = child:FindFirstChildOfClass("TextLabel") or (child:IsA("TextButton") and child)
                 if label and (label.Text == "Toggle" or label.Text == "Lock" or label.Text == "Unlock") then
                     child.Visible = false
@@ -657,32 +758,25 @@ local function scanGenerators()
 end
 
 ----------------------------------------------------------------------
--- EXACT AUTO PERFECT SKILL CHECK (PC & MOBILE COMPATIBLE)
+-- EXACT AUTO PERFECT SKILL CHECK
 ----------------------------------------------------------------------
 
 local lastTapTime = 0
 local hasTappedCurrent = false
-local lastNeedleRot = nil
 
-local function isInTargetArc(r0, r1, targetStart, targetEnd)
-    local winLen = (targetEnd - targetStart) % 360
-    if ((r1 - targetStart) % 360) <= winLen then
-        return true
+local function isNeedleInZone(needleAngle, targetAngle)
+    local needle = needleAngle % 360
+    local target = targetAngle % 360
+    local sweetSpotStart = (target + 104) % 360
+    local sweetSpotEnd = (target + 114) % 360
+    if sweetSpotStart > sweetSpotEnd then
+        return needle >= sweetSpotStart or needle <= sweetSpotEnd
     end
-    if r0 ~= nil then
-        local sweep = (r1 - r0) % 360
-        if sweep > 0 and sweep < 180 then
-            local distToStart = (targetStart - r0) % 360
-            if distToStart <= sweep then
-                return true
-            end
-        end
-    end
-    return false
+    return needle >= sweetSpotStart and needle <= sweetSpotEnd
 end
 
-local function triggerSkillCheck(checkFrame, promptGui)
-    -- 1. PC Space Key Simulation
+local function simulateSpace(checkFrame, promptGui)
+    -- 1. Space Key simulation (PC & executors)
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
         task.defer(function()
@@ -699,8 +793,7 @@ local function triggerSkillCheck(checkFrame, promptGui)
         end)
     end
 
-    -- 2. Mobile Specific: Survivor-mob action button
-    local triggeredMobileButton = false
+    -- 2. Mobile action check button tap
     pcall(function()
         local pg = LocalPlayer:FindFirstChild("PlayerGui")
         if pg then
@@ -709,144 +802,69 @@ local function triggerSkillCheck(checkFrame, promptGui)
                 local action = mob:FindFirstChild("Controls") and mob.Controls:FindFirstChild("action")
                 local chk = action and (action:FindFirstChild("check") or action:FindFirstChildWhichIsA("GuiButton"))
                 if chk and chk:IsA("GuiObject") then
-                    triggeredMobileButton = true
-                    local p = chk.AbsolutePosition
-                    local s = chk.AbsoluteSize
-                    local inset = GuiService:GetGuiInset()
-                    local cx = p.X + (s.X / 2) + inset.X
-                    local cy = p.Y + (s.Y / 2) + inset.Y
-
-                    -- Firesignal
                     if firesignal then
                         firesignal(chk.Activated)
                         firesignal(chk.MouseButton1Click)
-                        firesignal(chk.MouseButton1Down)
-                        task.defer(function()
-                            firesignal(chk.MouseButton1Up)
-                        end)
                     end
-
-                    -- Touch and Mouse events
+                    local p = chk.AbsolutePosition
+                    local s = chk.AbsoluteSize
+                    local cx = p.X + s.X / 2
+                    local cy = p.Y + s.Y / 2
                     VirtualInputManager:SendTouchEvent(1, 0, cx, cy)
                     VirtualInputManager:SendTouchEvent(1, 2, cx, cy)
                     VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
                     VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
-
-                    -- VirtualUser
-                    VirtualUser:CaptureController()
-                    VirtualUser:Button1Down(Vector2.new(cx, cy))
-                    task.defer(function()
-                        VirtualUser:Button1Up(Vector2.new(cx, cy))
-                    end)
                 end
             end
         end
     end)
 
-    -- 3. Center Calculation & Fallback Touch/Click on checkFrame / Screen Center
-    local clickPos
-    if checkFrame and checkFrame.Parent then
-        local absPos = checkFrame.AbsolutePosition
-        local absSize = checkFrame.AbsoluteSize
-        local inset = GuiService:GetGuiInset()
-        clickPos = Vector2.new(absPos.X + absSize.X / 2 + inset.X, absPos.Y + absSize.Y / 2 + inset.Y)
-    else
-        local cam = Workspace.CurrentCamera
-        local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
-        clickPos = Vector2.new(vp.X / 2, vp.Y / 2)
-    end
-
-    if not triggeredMobileButton then
-        pcall(function()
-            VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, true, game, 1)
-            task.defer(function()
-                VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, false, game, 1)
-            end)
-        end)
-
-        pcall(function()
-            VirtualInputManager:SendTouchEvent(1, 0, clickPos.X, clickPos.Y)
-            task.defer(function()
-                VirtualInputManager:SendTouchEvent(1, 2, clickPos.X, clickPos.Y)
-            end)
-        end)
-
-        pcall(function()
-            VirtualUser:CaptureController()
-            VirtualUser:Button1Down(clickPos)
-            task.defer(function()
-                VirtualUser:Button1Up(clickPos)
-            end)
-        end)
-    end
-
-    -- 4. Trigger any GUI Buttons inside promptGui
+    -- 3. Click / firesignal inside promptGui
     if promptGui then
         for _, desc in ipairs(promptGui:GetDescendants()) do
-            if desc:IsA("GuiButton") then
+            if desc:IsA("GuiButton") and firesignal then
                 pcall(function()
-                    if firesignal then
-                        firesignal(desc.MouseButton1Click)
-                        firesignal(desc.Activated)
-                        firesignal(desc.MouseButton1Down)
-                        task.defer(function()
-                            firesignal(desc.MouseButton1Up)
-                        end)
-                    end
+                    firesignal(desc.Activated)
+                    firesignal(desc.MouseButton1Click)
                 end)
             end
         end
     end
 end
 
-connections[#connections + 1] = RunService.RenderStepped:Connect(function()
+connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if not (Toggles.AutoFixGen and Toggles.AutoFixGen.Value) then
         hasTappedCurrent = false
-        lastNeedleRot = nil
         return
     end
 
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if not pg then return end
 
-    local prompt = pg:FindFirstChild("SkillCheckPromptGui") or pg:FindFirstChild("SkillCheck")
+    local prompt = pg:FindFirstChild("SkillCheckPromptGui")
     if not prompt or not prompt.Enabled then
         hasTappedCurrent = false
-        lastNeedleRot = nil
         return
     end
 
-    local check = prompt:FindFirstChild("Check") or prompt:FindFirstChild("SkillCheck")
+    local check = prompt:FindFirstChild("Check")
     if not check or not check.Visible then
         hasTappedCurrent = false
-        lastNeedleRot = nil
         return
     end
 
-    local line = check:FindFirstChild("Line") or check:FindFirstChild("Needle") or check:FindFirstChild("Pointer")
-    local goal = check:FindFirstChild("Goal") or check:FindFirstChild("Target") or check:FindFirstChild("Zone")
+    local line = check:FindFirstChild("Line")
+    local goal = check:FindFirstChild("Goal")
     if not line or not goal then return end
 
-    local curRot = line.Rotation % 360
-    local goalRot = goal.Rotation % 360
-
     if hasTappedCurrent or (tick() - lastTapTime < 0.4) then
-        lastNeedleRot = curRot
         return
     end
 
-    -- Sweet spot: Violence District Great check is target + 104 to target + 114 DEG.
-    -- With sweep detection + 24 deg window (target + 98 to target + 122 DEG), it hits reliably on all devices
-    local sweetSpotStart = (goalRot + 98) % 360
-    local sweetSpotEnd = (goalRot + 122) % 360
-
-    if isInTargetArc(lastNeedleRot, curRot, sweetSpotStart, sweetSpotEnd) then
+    if isNeedleInZone(line.Rotation, goal.Rotation) then
         hasTappedCurrent = true
         lastTapTime = tick()
-        lastNeedleRot = nil
-        triggerSkillCheck(check, prompt)
-    else
-        lastNeedleRot = curRot
+        simulateSpace(check, prompt)
     end
 end)
 
@@ -1354,8 +1372,8 @@ MenuGroup:AddToggle("FloatingButtonOpen", {
     Default = true,
     Text = "Show EXE HUB Button",
     Callback = function(value)
-        if ExeHubFloatingButton and ExeHubFloatingButton.Button then
-            ExeHubFloatingButton.Button.Visible = value
+        if FloatingToggleGui then
+            FloatingToggleGui.Visible = value
         end
     end,
 })
@@ -1470,10 +1488,14 @@ Library:OnUnload(function()
     end
     table.clear(generatorHighlights)
     table.clear(trackedGenerators)
+
+    if FloatingToggleGui then
+        pcall(function() FloatingToggleGui:Destroy() end)
+    end
 end)
 
 ----------------------------------------------------------------------
--- THEME & SAVE MANAGERS
+-- THEME & SAVE MANAGERS (WITH PERSISTENT AUTO-SAVE)
 ----------------------------------------------------------------------
 
 ThemeManager:SetLibrary(Library)
@@ -1488,4 +1510,42 @@ SaveManager:SetFolder("ViolenceDistrict/configs")
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
 ThemeManager:ApplyToTab(Tabs["UI Settings"])
 
-SaveManager:LoadAutoloadConfig()
+-- Auto-Load Saved Configuration on execution
+pcall(function()
+    SaveManager:CheckFolderTree()
+    local defaultCfgPath = "ViolenceDistrict/configs/settings/default.json"
+    if isfile and isfile(defaultCfgPath) then
+        SaveManager:Load("default")
+    else
+        SaveManager:LoadAutoloadConfig()
+    end
+end)
+
+-- Auto-Save Configuration whenever player changes any toggle, slider, or color
+local autoSaveDebounce = false
+local function triggerAutoSave()
+    if autoSaveDebounce or Library.Unloaded then return end
+    autoSaveDebounce = true
+    task.delay(0.5, function()
+        autoSaveDebounce = false
+        pcall(function()
+            SaveManager:CheckFolderTree()
+            SaveManager:Save("default")
+            SaveManager:SaveAutoloadConfig("default")
+        end)
+    end)
+end
+
+task.spawn(function()
+    task.wait(1.5) -- Allow initial config load to settle before listening for user changes
+    for _, toggle in pairs(Toggles) do
+        if typeof(toggle) == "table" and toggle.OnChanged then
+            toggle:OnChanged(triggerAutoSave)
+        end
+    end
+    for _, option in pairs(Options) do
+        if typeof(option) == "table" and option.OnChanged then
+            option:OnChanged(triggerAutoSave)
+        end
+    end
+end)

@@ -14,6 +14,7 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
+local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
 local LocalPlayer = Players.LocalPlayer
@@ -41,11 +42,21 @@ local Window = Library:CreateWindow({
     ShowMobileButtons = false,
 })
 
--- Remove mobile Toggle and Lock buttons so only the Keybind menu is visible on mobile
+-- Universal "EXE HUB" Floating Toggle Button (Visible on all devices: PC & Mobile)
+local ExeHubFloatingButton = Library:AddDraggableButton("EXE HUB", function()
+    Library:Toggle()
+end)
+
+if ExeHubFloatingButton and ExeHubFloatingButton.Button then
+    ExeHubFloatingButton.Button.Position = UDim2.new(0, 20, 0, 60)
+    ExeHubFloatingButton.Button.ZIndex = 50
+end
+
+-- Remove default mobile Toggle and Lock buttons so only our EXE HUB button is active
 pcall(function()
     if Library.Floats then
         for _, child in ipairs(Library.Floats:GetChildren()) do
-            if child:IsA("GuiObject") and child ~= Library.KeybindFrame then
+            if child:IsA("GuiObject") and child ~= Library.KeybindFrame and (not ExeHubFloatingButton or child ~= ExeHubFloatingButton.Button) then
                 local label = child:FindFirstChildOfClass("TextLabel") or (child:IsA("TextButton") and child)
                 if label and (label.Text == "Toggle" or label.Text == "Lock" or label.Text == "Unlock") then
                     child.Visible = false
@@ -75,7 +86,7 @@ do
     local cornerGrip
 
     if keybindFrame then
-        keybindFrame.Visible = true
+        keybindFrame.Visible = false
 
         -- Detach KeybindFrame's UIScale from Library.Scales to allow independent scaling
         local keybindScale = keybindFrame:FindFirstChildOfClass("UIScale")
@@ -651,17 +662,23 @@ end
 
 local lastTapTime = 0
 local hasTappedCurrent = false
+local lastNeedleRot = nil
 
-local function isNeedleInZone(needleAngle, targetAngle)
-    local needle = needleAngle % 360
-    local target = targetAngle % 360
-    -- Expanded from 10 deg to 24 deg so mobile 30-45 FPS devices never skip over the sweet spot
-    local sweetSpotStart = (target + 98) % 360
-    local sweetSpotEnd = (target + 122) % 360
-    if sweetSpotStart > sweetSpotEnd then
-        return needle >= sweetSpotStart or needle <= sweetSpotEnd
+local function isInTargetArc(r0, r1, targetStart, targetEnd)
+    local winLen = (targetEnd - targetStart) % 360
+    if ((r1 - targetStart) % 360) <= winLen then
+        return true
     end
-    return needle >= sweetSpotStart and needle <= sweetSpotEnd
+    if r0 ~= nil then
+        local sweep = (r1 - r0) % 360
+        if sweep > 0 and sweep < 180 then
+            local distToStart = (targetStart - r0) % 360
+            if distToStart <= sweep then
+                return true
+            end
+        end
+    end
+    return false
 end
 
 local function triggerSkillCheck(checkFrame, promptGui)
@@ -682,43 +699,88 @@ local function triggerSkillCheck(checkFrame, promptGui)
         end)
     end
 
-    -- 2. Mobile Center Calculation
+    -- 2. Mobile Specific: Survivor-mob action button
+    local triggeredMobileButton = false
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            local mob = pg:FindFirstChild("Survivor-mob")
+            if mob then
+                local action = mob:FindFirstChild("Controls") and mob.Controls:FindFirstChild("action")
+                local chk = action and (action:FindFirstChild("check") or action:FindFirstChildWhichIsA("GuiButton"))
+                if chk and chk:IsA("GuiObject") then
+                    triggeredMobileButton = true
+                    local p = chk.AbsolutePosition
+                    local s = chk.AbsoluteSize
+                    local inset = GuiService:GetGuiInset()
+                    local cx = p.X + (s.X / 2) + inset.X
+                    local cy = p.Y + (s.Y / 2) + inset.Y
+
+                    -- Firesignal
+                    if firesignal then
+                        firesignal(chk.Activated)
+                        firesignal(chk.MouseButton1Click)
+                        firesignal(chk.MouseButton1Down)
+                        task.defer(function()
+                            firesignal(chk.MouseButton1Up)
+                        end)
+                    end
+
+                    -- Touch and Mouse events
+                    VirtualInputManager:SendTouchEvent(1, 0, cx, cy)
+                    VirtualInputManager:SendTouchEvent(1, 2, cx, cy)
+                    VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+                    VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+
+                    -- VirtualUser
+                    VirtualUser:CaptureController()
+                    VirtualUser:Button1Down(Vector2.new(cx, cy))
+                    task.defer(function()
+                        VirtualUser:Button1Up(Vector2.new(cx, cy))
+                    end)
+                end
+            end
+        end
+    end)
+
+    -- 3. Center Calculation & Fallback Touch/Click on checkFrame / Screen Center
     local clickPos
     if checkFrame and checkFrame.Parent then
         local absPos = checkFrame.AbsolutePosition
         local absSize = checkFrame.AbsoluteSize
-        clickPos = Vector2.new(absPos.X + absSize.X / 2, absPos.Y + absSize.Y / 2)
+        local inset = GuiService:GetGuiInset()
+        clickPos = Vector2.new(absPos.X + absSize.X / 2 + inset.X, absPos.Y + absSize.Y / 2 + inset.Y)
     else
         local cam = Workspace.CurrentCamera
         local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
         clickPos = Vector2.new(vp.X / 2, vp.Y / 2)
     end
 
-    -- 3. Mobile Touch & Mouse Input Events
-    pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, true, game, 1)
-        task.defer(function()
-            VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, false, game, 1)
+    if not triggeredMobileButton then
+        pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, true, game, 1)
+            task.defer(function()
+                VirtualInputManager:SendMouseButtonEvent(clickPos.X, clickPos.Y, 0, false, game, 1)
+            end)
         end)
-    end)
 
-    pcall(function()
-        VirtualInputManager:SendTouchEvent(1, 0, clickPos.X, clickPos.Y)
-        task.defer(function()
-            VirtualInputManager:SendTouchEvent(1, 2, clickPos.X, clickPos.Y)
+        pcall(function()
+            VirtualInputManager:SendTouchEvent(1, 0, clickPos.X, clickPos.Y)
+            task.defer(function()
+                VirtualInputManager:SendTouchEvent(1, 2, clickPos.X, clickPos.Y)
+            end)
         end)
-    end)
 
-    -- 4. VirtualUser Controller/Touch Click
-    pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:Button1Down(clickPos)
-        task.defer(function()
-            VirtualUser:Button1Up(clickPos)
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:Button1Down(clickPos)
+            task.defer(function()
+                VirtualUser:Button1Up(clickPos)
+            end)
         end)
-    end)
+    end
 
-    -- 5. Trigger GUI Buttons / firesignal for mobile UI buttons
+    -- 4. Trigger any GUI Buttons inside promptGui
     if promptGui then
         for _, desc in ipairs(promptGui:GetDescendants()) do
             if desc:IsA("GuiButton") then
@@ -740,36 +802,51 @@ end
 connections[#connections + 1] = RunService.RenderStepped:Connect(function()
     if not (Toggles.AutoFixGen and Toggles.AutoFixGen.Value) then
         hasTappedCurrent = false
+        lastNeedleRot = nil
         return
     end
 
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
     if not pg then return end
 
-    local prompt = pg:FindFirstChild("SkillCheckPromptGui")
+    local prompt = pg:FindFirstChild("SkillCheckPromptGui") or pg:FindFirstChild("SkillCheck")
     if not prompt or not prompt.Enabled then
         hasTappedCurrent = false
+        lastNeedleRot = nil
         return
     end
 
-    local check = prompt:FindFirstChild("Check")
+    local check = prompt:FindFirstChild("Check") or prompt:FindFirstChild("SkillCheck")
     if not check or not check.Visible then
         hasTappedCurrent = false
+        lastNeedleRot = nil
         return
     end
 
-    local line = check:FindFirstChild("Line")
-    local goal = check:FindFirstChild("Goal")
+    local line = check:FindFirstChild("Line") or check:FindFirstChild("Needle") or check:FindFirstChild("Pointer")
+    local goal = check:FindFirstChild("Goal") or check:FindFirstChild("Target") or check:FindFirstChild("Zone")
     if not line or not goal then return end
 
+    local curRot = line.Rotation % 360
+    local goalRot = goal.Rotation % 360
+
     if hasTappedCurrent or (tick() - lastTapTime < 0.4) then
+        lastNeedleRot = curRot
         return
     end
 
-    if isNeedleInZone(line.Rotation, goal.Rotation) then
+    -- Sweet spot: Violence District Great check is target + 104 to target + 114 DEG.
+    -- With sweep detection + 24 deg window (target + 98 to target + 122 DEG), it hits reliably on all devices
+    local sweetSpotStart = (goalRot + 98) % 360
+    local sweetSpotEnd = (goalRot + 122) % 360
+
+    if isInTargetArc(lastNeedleRot, curRot, sweetSpotStart, sweetSpotEnd) then
         hasTappedCurrent = true
         lastTapTime = tick()
+        lastNeedleRot = nil
         triggerSkillCheck(check, prompt)
+    else
+        lastNeedleRot = curRot
     end
 end)
 
@@ -1266,10 +1343,20 @@ local MenuGroup = Tabs["UI Settings"]:AddGroupbox({
 })
 
 MenuGroup:AddToggle("KeybindMenuOpen", {
-    Default = true,
+    Default = false,
     Text = "Open Keybind Menu",
     Callback = function(value)
         Library.KeybindFrame.Visible = value
+    end,
+})
+
+MenuGroup:AddToggle("FloatingButtonOpen", {
+    Default = true,
+    Text = "Show EXE HUB Button",
+    Callback = function(value)
+        if ExeHubFloatingButton and ExeHubFloatingButton.Button then
+            ExeHubFloatingButton.Button.Visible = value
+        end
     end,
 })
 
@@ -1393,7 +1480,7 @@ ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 
 SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ "EXEHUBKeybind", "KillScriptKeybind", "SpeedKeybind", "NoclipKeybind", "FlyKeybind" })
+SaveManager:SetIgnoreIndexes({ "EXEHUBKeybind", "KillScriptKeybind", "SpeedKeybind", "NoclipKeybind", "FlyKeybind", "KeybindMenuOpen", "FloatingButtonOpen" })
 
 ThemeManager:SetFolder("ViolenceDistrict")
 SaveManager:SetFolder("ViolenceDistrict/configs")

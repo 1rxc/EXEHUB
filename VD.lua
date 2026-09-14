@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9.1 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.2 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -66,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.1",
+    Footer = "VD 2.9.2",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1156,7 +1156,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.1 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.2 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2448,6 +2448,99 @@ local function triggerParryInputs(daggerTool, mPos)
     end)
 end
 
+local function isParryOnCooldown()
+    local daggerTool = getParryingDagger()
+    if not daggerTool then return false end
+
+    local myChar = LocalPlayer.Character
+
+    -- Check Character attributes & ValueObjects
+    if myChar then
+        for _, attr in ipairs({
+            "ParryCooldown", "DaggerCooldown", "Parrying", "IsParrying",
+            "InCooldown", "ActionCooldown"
+        }) do
+            if myChar:GetAttribute(attr) == true then
+                return true
+            end
+        end
+        local charCd = myChar:GetAttribute("ParryCooldownEnd") or myChar:GetAttribute("DaggerCooldownEnd")
+        if typeof(charCd) == "number" and charCd > tick() then
+            return true
+        end
+        local charCdObj = myChar:FindFirstChild("ParryCooldown") or myChar:FindFirstChild("Cooldown")
+        if charCdObj then
+            if charCdObj:IsA("BoolValue") and charCdObj.Value == true then
+                return true
+            elseif charCdObj:IsA("NumberValue") and charCdObj.Value > tick() then
+                return true
+            end
+        end
+    end
+
+    -- Check Tool state & attributes
+    if typeof(daggerTool) == "Instance" then
+        if daggerTool:IsA("Tool") and daggerTool.Enabled == false then
+            return true
+        end
+        for _, attr in ipairs({
+            "Cooldown", "OnCooldown", "ParryCooldown", "IsCooldown", 
+            "InCooldown", "CooldownActive", "ActionCooldown", "Debounce"
+        }) do
+            if daggerTool:GetAttribute(attr) == true then
+                return true
+            end
+        end
+        local cdEnd = daggerTool:GetAttribute("CooldownEnd") or daggerTool:GetAttribute("CooldownTime")
+        if typeof(cdEnd) == "number" and cdEnd > tick() then
+            return true
+        end
+        local cdObj = daggerTool:FindFirstChild("Cooldown") or daggerTool:FindFirstChild("OnCooldown") or daggerTool:FindFirstChild("Debounce")
+        if cdObj then
+            if cdObj:IsA("BoolValue") and cdObj.Value == true then
+                return true
+            elseif cdObj:IsA("NumberValue") and cdObj.Value > tick() then
+                return true
+            end
+        end
+    end
+
+    -- Check LocalPlayer state
+    if LocalPlayer:GetAttribute("ParryCooldown") == true or LocalPlayer:GetAttribute("DaggerCooldown") == true then
+        return true
+    end
+
+    return false
+end
+
+local function isTrackParriedRecently(track)
+    if not track then return false end
+    local lastTick = parriedTracks[track]
+    if lastTick then
+        if tick() - lastTick < 0.45 then
+            return true
+        else
+            parriedTracks[track] = nil
+        end
+    end
+    return false
+end
+
+local function markTrackParried(track)
+    if not track then return end
+    parriedTracks[track] = tick()
+    task.delay(0.45, function()
+        if parriedTracks[track] and (tick() - parriedTracks[track] >= 0.45) then
+            parriedTracks[track] = nil
+        end
+    end)
+    pcall(function()
+        track.Stopped:Once(function()
+            parriedTracks[track] = nil
+        end)
+    end)
+end
+
 local function executeParry(source)
     if not (Toggles.AutoParry and Toggles.AutoParry.Value) and source ~= "MANUAL_TEST" then
         return false
@@ -2460,8 +2553,13 @@ local function executeParry(source)
         return false
     end
 
+    -- If dagger is actively on cooldown, do not consume debounce or fire useless inputs
+    if source ~= "MANUAL_TEST" and isParryOnCooldown() then
+        return false
+    end
+
     local now = tick()
-    if now - lastParryTick < 0.65 then return false end
+    if now - lastParryTick < 0.40 then return false end
     lastParryTick = now
 
     local myChar = LocalPlayer.Character
@@ -2480,15 +2578,22 @@ local function executeParry(source)
     -- 2. Frame 0: Immediate zero-latency Input Dispatch
     triggerParryInputs(daggerTool, mPos)
 
-    -- 2B. Frame 1: Secondary confirmation pulse
+    -- 2B. Frame 0 Defer: Confirmation pulse on end of frame
     task.defer(function()
         local currentDagger = getParryingDagger() or daggerTool
         triggerParryInputs(currentDagger, mPos)
     end)
 
-    -- 2C. Hold 220ms to lock counter stance, then cleanly release inputs
+    -- 2C. Frame 1 Pulse: Guarantees registration if Roblox engine took a physics step to mount the tool
     task.spawn(function()
-        task.wait(0.22)
+        RunService.Heartbeat:Wait()
+        local currentDagger = getParryingDagger() or daggerTool
+        triggerParryInputs(currentDagger, mPos)
+    end)
+
+    -- 2D. Hold 250ms to lock counter stance, then cleanly release inputs
+    task.spawn(function()
+        task.wait(0.25)
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, false, game, 1)
@@ -2524,9 +2629,14 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         return
     end
 
+    -- 2B. Cooldown Check: Never waste debounces or attempt parries while dagger is cooling down
+    if isParryOnCooldown() then
+        return
+    end
+
     -- 3. Animation check: verify track is a damaging combat animation (filters non-damaging kicks/breaking)
     if track then
-        if parriedTracks[track] then return end
+        if isTrackParriedRecently(track) then return end
         if not isAttackAnimation(track) then
             return
         end
@@ -2571,20 +2681,20 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     -- If killer is not facing our character, DO NOT PARRY (hitting air)!
     local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
     if doFaceCheck then
-        if flatDist <= 4.0 then
-            -- At point-blank, killer must still face towards player (cannot face backwards)
-            if aimDot < 0.20 then
+        if flatDist <= 4.5 then
+            -- At point-blank, killer must face generally towards player (cannot face backwards)
+            if aimDot < 0.15 then
                 return -- Killer is facing away from player even at point-blank
             end
-        elseif flatDist <= 9.0 then
-            -- In standard melee range, killer must be facing towards player (within ~55 degrees)
-            if aimDot < 0.55 then
+        elseif flatDist <= 9.5 then
+            -- In standard melee range, killer must be facing towards player (within ~60 degrees)
+            if aimDot < 0.50 then
                 return -- Killer is swinging sideways or hitting air away from player
             end
         else
-            -- At lunge distance (> 9 studs), killer must be aimed directly at player (within ~45 degrees)
-            if aimDot < 0.70 then
-                return -- Lunge is not aimed at player; will hit air
+            -- At chase / lunge distance (> 9.5 studs), killer must be aimed towards player (within ~56 degrees)
+            if aimDot < 0.55 then
+                return -- Killer is lunging/hitting empty air away from player
             end
         end
     else
@@ -2594,26 +2704,38 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         end
     end
 
-    -- 7. SMART DISTANCE CHECK:
+    -- 7. SMART DISTANCE & CHASE CHECK (RUNNING / PURSUIT AWARE):
     -- User's slider determines maximum parry reach (e.g. 13 studs)
     local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13.0
 
-    -- Dynamic lunge compensation: Only add distance if killer is moving TOWARDS the player!
     local kVel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity or Vector3.zero)
+    local flatKVel = Vector2.new(kVel.X, kVel.Z)
     local myVel = (myRoot.AssemblyLinearVelocity or myRoot.Velocity or Vector3.zero)
-    local relVel = kVel - myVel
-    local flatRelVel = Vector2.new(relVel.X, relVel.Z)
-    local closingSpeed = flatRelVel:Dot(flatToMe)
+    local flatMyVel = Vector2.new(myVel.X, myVel.Z)
 
-    -- If killer is moving away from the player (closingSpeed < -1.5) and not point-blank, swing will miss air
-    if closingSpeed < -1.5 and flatDist > 5.5 then
-        return
+    -- kSpeedTowardsMe: Speed at which the KILLER is moving towards the player
+    local kSpeedTowardsMe = flatKVel:Dot(flatToMe)
+
+    -- Check if KILLER is moving away from the player (e.g. walking backwards / retreating)
+    -- IMPORTANT: We ONLY check killer's own velocity towards the player, NOT relative velocity!
+    -- When the local player runs away, player velocity is positive, which used to make relative velocity negative and break parrying while running!
+    if kSpeedTowardsMe < -3.0 and flatDist > 5.5 then
+        return -- Killer is actively running away from player; swing will miss air
     end
 
-    -- Only allow lunge expansion if killer is actively running/lunging towards the player
+    -- Player is running away (being chased) if local player velocity is moving away from killer
+    local isPlayerRunningAway = (flatMyVel:Dot(flatToMe) > 3.0)
+
+    -- Dynamic lunge compensation:
+    -- When the killer is moving/lunging towards us, their attack hitbox extends forward
     local lungeBonus = 0
-    if closingSpeed > 2.0 then
-        lungeBonus = math.clamp(closingSpeed * 0.25, 0, 3.0)
+    if kSpeedTowardsMe > 1.5 then
+        lungeBonus = math.clamp(kSpeedTowardsMe * 0.25, 0, 3.5)
+    end
+
+    -- Chase Bonus: When survivor is running away and killer is chasing from behind, killer's lunge reaches further
+    if isPlayerRunningAway and kSpeedTowardsMe > 0.5 then
+        lungeBonus = math.max(lungeBonus, 2.0)
     end
 
     local effectiveMaxDist = maxDist + lungeBonus
@@ -2644,18 +2766,10 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         end
     end
 
-    -- 7. Guaranteed Protection Execution
+    -- 9. Guaranteed Protection Execution
     local executed = executeParry("KILLER_ATTACK")
     if executed and track then
-        parriedTracks[track] = true
-        task.delay(0.70, function()
-            parriedTracks[track] = nil
-        end)
-        pcall(function()
-            track.Stopped:Once(function()
-                parriedTracks[track] = nil
-            end)
-        end)
+        markTrackParried(track)
     end
 end
 
@@ -2850,7 +2964,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                                 local kAnim = pChar:FindFirstChildWhichIsA("Animator", true)
                                 if kAnim then
                                     for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
-                                        if not parriedTracks[track] and isAttackAnimation(track) then
+                                        if not isTrackParriedRecently(track) and isAttackAnimation(track) then
                                             checkAndTriggerParry(pChar, player, track)
                                         end
                                     end
@@ -2860,8 +2974,9 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                     end
                 end
 
-                -- Auto Pre-Equip Parrying Dagger near Killer for 0ms draw latency
-                if nearestKillerDist <= 35.0 and not isDaggerEquipped and hum and hum.Health > 0 then
+                -- Auto Pre-Equip Parrying Dagger when cooled down & near Killer for 0ms draw latency
+                local onCd = isParryOnCooldown()
+                if not onCd and not isDaggerEquipped and hum and hum.Health > 0 and nearestKillerDist <= 40.0 then
                     pcall(function()
                         hum:EquipTool(daggerTool)
                     end)
@@ -3432,7 +3547,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.1)",
+                        Title = "Auto Parry (VD 2.9.2)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3440,7 +3555,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.1)",
+                        Title = "Auto Parry (VD 2.9.2)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3684,19 +3799,8 @@ task.spawn(function()
             if daggerStatusLabel and daggerStatusLabel.SetText then
                 local tool, isEquipped = getParryingDagger()
                 if tool then
-                    local isOnCd = false
-                    if typeof(tool) == "Instance" then
-                        if tool:IsA("Tool") and tool.Enabled == false then
-                            isOnCd = true
-                        end
-                        if tool:GetAttribute("Cooldown") == true or tool:GetAttribute("OnCooldown") == true or tool:GetAttribute("ParryCooldown") == true then
-                            isOnCd = true
-                        end
-                    end
+                    local isOnCd = isParryOnCooldown()
                     local myChar = LocalPlayer.Character
-                    if myChar and (myChar:GetAttribute("ParryCooldown") == true or myChar:GetAttribute("DaggerCooldown") == true or myChar:GetAttribute("Parrying") == true) then
-                        isOnCd = true
-                    end
                     if isOnCd then
                         local tName = "Parrying Dagger"
                         if typeof(tool) == "Instance" and tool ~= myChar and tool ~= LocalPlayer and tool.Name ~= "" then
@@ -3706,7 +3810,7 @@ task.spawn(function()
                     elseif isEquipped then
                         daggerStatusLabel:SetText("Dagger: Equipped & Ready (Can Activate)")
                     else
-                        daggerStatusLabel:SetText("Dagger: In Backpack & Ready (Can Activate)")
+                        daggerStatusLabel:SetText("Dagger: Cooled Down & Ready (In Backpack)")
                     end
                 else
                     daggerStatusLabel:SetText("Dagger: Not in Inventory (Cannot Activate)")
@@ -3962,8 +4066,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.1 Loaded Successfully!",
+        Description = "VD 2.9.2 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.1 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.2 Loaded Successfully! Enjoy!")
 end)

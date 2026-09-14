@@ -2156,39 +2156,162 @@ local function isAttackAnimation(track)
     return false
 end
 
-local function isDaggerTool(item)
-    if not item or not item:IsA("Tool") then return false end
-    local n = (item.Name or ""):lower()
-    local tip = (item.ToolTip or ""):lower()
-    if n:find("parry") or n:find("dagger") or tip:find("parry") or tip:find("dagger") or n:find("knife") then
+local function isDaggerString(str)
+    if not str or typeof(str) ~= "string" then return false end
+    local s = str:lower()
+    return s:find("parry") ~= nil or s:find("dagger") ~= nil or s:find("knife") ~= nil
+end
+
+local function isDaggerObject(obj)
+    if not obj or typeof(obj) ~= "Instance" then return false end
+    if isDaggerString(obj.Name) then return true end
+
+    local tip = ""
+    pcall(function()
+        if obj:IsA("Tool") then
+            tip = obj.ToolTip or ""
+        end
+    end)
+    if isDaggerString(tip) then return true end
+
+    for _, attr in ipairs({
+        "ItemType", "WeaponType", "Type", "ID", "ItemName", "ToolType",
+        "Item", "EquippedItem", "SelectedItem", "SurvivorItem", "CurrentItem", "Name"
+    }) do
+        local aVal = tostring(obj:GetAttribute(attr) or "")
+        if isDaggerString(aVal) then return true end
+    end
+
+    if obj:IsA("StringValue") and isDaggerString(obj.Value) then
         return true
     end
-    for _, attr in ipairs({"ItemType", "WeaponType", "Type", "ID", "ItemName", "ToolType"}) do
-        local aVal = tostring(item:GetAttribute(attr) or ""):lower()
-        if aVal:find("parry") or aVal:find("dagger") or aVal:find("knife") then
-            return true
-        end
+
+    if obj:IsA("ObjectValue") and obj.Value and isDaggerString(obj.Value.Name) then
+        return true
     end
+
     return false
 end
 
 local function getParryingDagger()
     local char = LocalPlayer.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if isDaggerTool(item) then
-                return item, true
-            end
-        end
-    end
     local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-    if bp then
-        for _, item in ipairs(bp:GetChildren()) do
-            if isDaggerTool(item) then
-                return item, false
+
+    -- 1. Direct Tool/Model in Character
+    if char then
+        for _, child in ipairs(char:GetChildren()) do
+            if isDaggerObject(child) then
+                return child, true
             end
         end
     end
+
+    -- 2. Direct Tool/Model in Backpack
+    if bp then
+        for _, child in ipairs(bp:GetChildren()) do
+            if isDaggerObject(child) then
+                return child, false
+            end
+        end
+    end
+
+    -- 3. Character Descendants (handles nested Models, Accessories, MeshParts in RightHand/Torso)
+    if char then
+        for _, desc in ipairs(char:GetDescendants()) do
+            if desc:IsA("Tool") or desc:IsA("Model") or desc:IsA("Accessory") or desc:IsA("MeshPart") or desc:IsA("BasePart") then
+                if isDaggerObject(desc) or (desc.Parent and isDaggerObject(desc.Parent)) then
+                    local target = (desc:IsA("Tool") or desc:IsA("Model")) and desc or (desc.Parent:IsA("Model") and desc.Parent or desc)
+                    return target, true
+                end
+            end
+        end
+    end
+
+    -- 4. Backpack Descendants
+    if bp then
+        for _, desc in ipairs(bp:GetDescendants()) do
+            if isDaggerObject(desc) or (desc.Parent and isDaggerObject(desc.Parent)) then
+                return desc, false
+            end
+        end
+    end
+
+    -- 5. Match via Live Inspector Engine (the exact system displaying "Item : Parrying Dagger" in UI)
+    local liveItem = nil
+    if getPlayerEquippedItem then
+        pcall(function()
+            liveItem = getPlayerEquippedItem(LocalPlayer, false)
+        end)
+    end
+    if isDaggerString(liveItem) then
+        local candidate = nil
+        if char then
+            for _, item in ipairs(char:GetChildren()) do
+                if item:IsA("Tool") then candidate = item; break end
+            end
+            if not candidate then
+                for _, desc in ipairs(char:GetDescendants()) do
+                    if (desc:IsA("Tool") or desc:IsA("Model")) and isDaggerObject(desc) then
+                        candidate = desc
+                        break
+                    end
+                end
+            end
+        end
+        return candidate or char, true
+    end
+
+    -- 6. Check Character & Player Attributes
+    local itemAttributeKeys = {
+        "Item", "EquippedItem", "SelectedItem", "SurvivorItem", "CurrentItem",
+        "LoadoutItem", "Weapon", "KillerWeapon", "HeldItem", "ActiveItem",
+        "Tool", "ItemName", "SlotItem", "Item1", "Slot_Item", "EquippedWeapon",
+        "PrimaryItem", "SecondaryItem", "SelectedWeapon", "Equipped_Item"
+    }
+    if char then
+        for _, key in ipairs(itemAttributeKeys) do
+            local val = char:GetAttribute(key)
+            if isDaggerString(val) then
+                return char, true
+            end
+        end
+    end
+    for _, key in ipairs(itemAttributeKeys) do
+        local val = LocalPlayer:GetAttribute(key)
+        if isDaggerString(val) then
+            return char or LocalPlayer, true
+        end
+    end
+
+    -- 7. Check Inventory / Item Folders in Player & Character
+    for _, parent in ipairs({char, LocalPlayer, bp}) do
+        if parent then
+            for _, child in ipairs(parent:GetChildren()) do
+                local cName = child.Name:lower()
+                if cName:find("item") or cName:find("inventory") or cName:find("loadout") or cName:find("gear") or cName:find("slot") then
+                    if isDaggerObject(child) then return child, true end
+                    for _, sub in ipairs(child:GetChildren()) do
+                        if isDaggerObject(sub) then return sub, true end
+                    end
+                end
+            end
+        end
+    end
+
+    -- 8. Check PlayerGui (GUI Item Slots & Touch Buttons)
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, desc in ipairs(pg:GetDescendants()) do
+            if desc:IsA("ImageButton") or desc:IsA("TextButton") or desc:IsA("ImageLabel") or desc:IsA("TextLabel") then
+                local dName = desc.Name:lower()
+                local dText = desc:IsA("TextLabel") and desc.Text:lower() or ""
+                if isDaggerString(dName) or isDaggerString(dText) then
+                    return desc, true
+                end
+            end
+        end
+    end
+
     return nil, false
 end
 
@@ -2227,39 +2350,77 @@ local function isAttacker(player, char, track)
 end
 
 local function triggerParryInputs(daggerTool, mPos)
+    local mPos = mPos or UserInputService:GetMouseLocation()
+
+    -- 1. VirtualInputManager Mouse Clicks (Right click + Left click)
     pcall(function()
         VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1)
         VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, true, game, 1)
     end)
     if mouse2press then pcall(mouse2press) end
     if mouse1press then pcall(mouse1press) end
+    if mouse2click then pcall(mouse2click) end
+    if mouse1click then pcall(mouse1click) end
+
+    -- 2. VirtualUser Mouse Clicks
     pcall(function()
         VirtualUser:Button2Down(Vector2.new(mPos.X, mPos.Y))
         VirtualUser:Button1Down(Vector2.new(mPos.X, mPos.Y))
     end)
+
+    -- 3. Universal Combat Keypresses (F, E, Q)
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
     end)
 
-    if daggerTool then
+    -- 4. Tool :Activate() if tool exists in character
+    local myChar = LocalPlayer.Character
+    if daggerTool and typeof(daggerTool) == "Instance" and daggerTool:IsA("Tool") then
         pcall(function()
-            if daggerTool.Activate then
-                daggerTool:Activate()
-            end
-            for _, rem in ipairs(daggerTool:GetDescendants()) do
-                if rem:IsA("RemoteEvent") then
-                    local rName = rem.Name:lower()
-                    if rName:find("parry") or rName:find("guard") or rName:find("block") or rName:find("counter") or rName:find("use") or rName:find("activate") then
-                        rem:FireServer()
-                    end
+            if daggerTool.Activate then daggerTool:Activate() end
+        end)
+    elseif myChar then
+        pcall(function()
+            for _, item in ipairs(myChar:GetChildren()) do
+                if item:IsA("Tool") and item.Activate then
+                    item:Activate()
                 end
             end
         end)
     end
 
+    -- 5. Remote Events in Tool, Character, Backpack, and ReplicatedStorage
     pcall(function()
-        for _, name in ipairs({"Parry", "ParryEvent", "GuardEvent", "BlockEvent", "UseParry"}) do
+        local function scanAndFireRemotes(container)
+            if not container or typeof(container) ~= "Instance" then return end
+            for _, rem in ipairs(container:GetDescendants()) do
+                if rem:IsA("RemoteEvent") then
+                    local rName = rem.Name:lower()
+                    if rName:find("parry") or rName:find("guard") or rName:find("block") or rName:find("counter") or rName:find("defend") or rName:find("use") or rName:find("activate") or rName:find("action") or rName:find("ability") then
+                        rem:FireServer()
+                    end
+                end
+            end
+        end
+
+        if daggerTool and typeof(daggerTool) == "Instance" then
+            scanAndFireRemotes(daggerTool)
+        end
+        if myChar then
+            scanAndFireRemotes(myChar)
+        end
+        local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+        if bp then
+            scanAndFireRemotes(bp)
+        end
+
+        for _, name in ipairs({
+            "Parry", "ParryEvent", "GuardEvent", "BlockEvent", "UseParry",
+            "ParryAction", "SurvivorParry", "UseItem", "ItemUse", "ActivateItem",
+            "UseAbility", "Ability", "Defend", "Counter"
+        }) do
             local r = ReplicatedStorage:FindFirstChild(name, true)
             if r and r:IsA("RemoteEvent") then
                 r:FireServer()
@@ -2267,13 +2428,14 @@ local function triggerParryInputs(daggerTool, mPos)
         end
     end)
 
+    -- 6. PlayerGui Touch / Mobile GUI Buttons & HUD Action Buttons
     pcall(function()
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then
             for _, desc in ipairs(pg:GetDescendants()) do
                 if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
                     local dName = desc.Name:lower()
-                    if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") then
+                    if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") or dName:find("action") or dName:find("skill") or dName:find("use") then
                         if firesignal then
                             firesignal(desc.Activated)
                             firesignal(desc.MouseButton1Click)
@@ -2306,8 +2468,8 @@ local function executeParry(source)
     local myChar = LocalPlayer.Character
     local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
 
-    -- 1. Synchronously equip Parrying Dagger if in backpack (0ms delay)
-    if daggerTool and not isEquipped and myChar then
+    -- 1. Synchronously equip Parrying Dagger if in backpack and is a real Tool
+    if daggerTool and typeof(daggerTool) == "Instance" and daggerTool:IsA("Tool") and not isEquipped and myChar then
         pcall(function()
             daggerTool.Parent = myChar
             if hum then hum:EquipTool(daggerTool) end
@@ -2316,10 +2478,10 @@ local function executeParry(source)
 
     local mPos = UserInputService:GetMouseLocation()
 
-    -- 2. Immediate zero-latency Input Dispatch (Frame 0)
+    -- 2. Frame 0: Immediate zero-latency Input Dispatch
     triggerParryInputs(daggerTool, mPos)
 
-    -- 2B. Secondary confirmation pulse (Frame 1) for guaranteed engine registration
+    -- 2B. Frame 1: Secondary confirmation pulse
     task.defer(function()
         local currentDagger = getParryingDagger() or daggerTool
         triggerParryInputs(currentDagger, mPos)
@@ -2341,6 +2503,7 @@ local function executeParry(source)
         pcall(function()
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
         end)
     end)
 
@@ -2390,15 +2553,15 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
 
     -- 5. Distance check: Killer must be within striking/lunge range (allowing lunge margin)
     local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 16.0
-    if dist > (maxDist + 5.0) then
+    if dist > (maxDist + 8.0) then
         return
     end
 
     -- 6. Aim Cone & Trajectory Check:
-    -- In close combat (<= 12 studs), killer weapon swing/lunge sweeps connect regardless of facing angle!
-    -- Only check angle if killer is further than 12 studs.
+    -- In close combat (<= 14 studs), killer weapon swing/lunge sweeps connect regardless of facing angle!
+    -- Only check angle if killer is further than 14 studs.
     local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
-    if doFaceCheck and dist > 12.0 then
+    if doFaceCheck and dist > 14.0 then
         local toMe = (myPos - kPos).Unit
         local kLook = kRoot.CFrame.LookVector
         local aimDot = kLook:Dot(toMe)
@@ -3449,15 +3612,24 @@ task.spawn(function()
                 local tool, isEquipped = getParryingDagger()
                 if tool then
                     local isOnCd = false
-                    if tool.Enabled == false or tool:GetAttribute("Cooldown") == true or tool:GetAttribute("OnCooldown") == true then
-                        isOnCd = true
+                    if typeof(tool) == "Instance" then
+                        if tool:IsA("Tool") and tool.Enabled == false then
+                            isOnCd = true
+                        end
+                        if tool:GetAttribute("Cooldown") == true or tool:GetAttribute("OnCooldown") == true or tool:GetAttribute("ParryCooldown") == true then
+                            isOnCd = true
+                        end
                     end
                     local myChar = LocalPlayer.Character
-                    if myChar and (myChar:GetAttribute("ParryCooldown") == true or myChar:GetAttribute("DaggerCooldown") == true) then
+                    if myChar and (myChar:GetAttribute("ParryCooldown") == true or myChar:GetAttribute("DaggerCooldown") == true or myChar:GetAttribute("Parrying") == true) then
                         isOnCd = true
                     end
                     if isOnCd then
-                        daggerStatusLabel:SetText("Dagger: On Cooldown (" .. tool.Name .. ")")
+                        local tName = "Parrying Dagger"
+                        if typeof(tool) == "Instance" and tool ~= myChar and tool ~= LocalPlayer and tool.Name ~= "" then
+                            tName = tool.Name
+                        end
+                        daggerStatusLabel:SetText("Dagger: On Cooldown (" .. tName .. ")")
                     elseif isEquipped then
                         daggerStatusLabel:SetText("Dagger: Equipped & Ready (Can Activate)")
                     else

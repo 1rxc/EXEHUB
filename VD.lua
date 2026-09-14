@@ -1,6 +1,6 @@
--- Violence District | EXE HUB Script VD 1.9 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.0 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
--- Tabs: ESP | Automatic | Player | Settings
+-- Tabs: ESP | Automatic | Player | Camera | Parry | Settings
 
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -36,7 +36,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 1.9",
+    Footer = "VD 2.0",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -196,6 +196,8 @@ local Tabs = {
     ESP = Window:AddTab("ESP"),
     Automatic = Window:AddTab("Automatic"),
     Player = Window:AddTab("Player"),
+    Camera = Window:AddTab("Camera"),
+    Parry = Window:AddTab("Parry"),
     ["UI Settings"] = Window:AddTab("Settings"),
 }
 
@@ -563,6 +565,30 @@ local MovementGroupBox = Tabs.Player:AddGroupbox({
     Name = "Movement",
 })
 
+-- Inside Camera Tab: Field of View (Left) and Presets (Right)
+local CameraGroupBox = Tabs.Camera:AddGroupbox({
+    Side = "Left",
+    Name = "Field of View",
+})
+
+local CameraInfoGroupBox = Tabs.Camera:AddGroupbox({
+    Side = "Right",
+    Name = "Camera Info & Presets",
+})
+
+-- Inside Parry Tab: Live Inspector (Left) and Auto Parry (Right)
+local LiveUIGroupBox = Tabs.Parry:AddGroupbox({
+    Side = "Left",
+    Name = "Live Player & Perk Inspector",
+})
+
+local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
+    Side = "Right",
+    Name = "Auto Parry (Parrying Dagger)",
+})
+
+local bindCombatListeners = nil
+
 ----------------------------------------------------------------------
 -- ROLE & DETECTION LOGIC
 ----------------------------------------------------------------------
@@ -709,6 +735,9 @@ local function setupPlayer(player)
     connections[#connections + 1] = player.CharacterAdded:Connect(function(char)
         task.wait(0.2)
         applyPlayerHighlight(player, char)
+        if bindCombatListeners and isKiller(player) then
+            bindCombatListeners(player, char)
+        end
     end)
 
     connections[#connections + 1] = player.CharacterRemoving:Connect(function()
@@ -722,10 +751,16 @@ local function setupPlayer(player)
         if playerHighlights[player] then
             updatePlayerHighlight(player, playerHighlights[player])
         end
+        if bindCombatListeners and player.Character and isKiller(player) then
+            bindCombatListeners(player, player.Character)
+        end
     end)
 
     if player.Character then
         applyPlayerHighlight(player, player.Character)
+        if bindCombatListeners and isKiller(player) then
+            bindCombatListeners(player, player.Character)
+        end
     end
 end
 
@@ -1107,6 +1142,19 @@ local function getFlySpeedValue()
     return 50
 end
 
+local function getFOVValue()
+    if Options.CustomFOVInput and Options.CustomFOVInput.Value then
+        local num = tonumber(Options.CustomFOVInput.Value)
+        if num and num >= 30 and num <= 130 then
+            return num
+        end
+    end
+    if Options.FOVValue and Options.FOVValue.Value then
+        return Options.FOVValue.Value
+    end
+    return 70
+end
+
 -- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if not (Toggles.AntiStun and Toggles.AntiStun.Value) then return end
@@ -1198,6 +1246,417 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
         end
     end
 end)
+
+----------------------------------------------------------------------
+-- PLAYER PERK & ITEM DISCOVERY ENGINE (LIVE UI)
+----------------------------------------------------------------------
+
+local function getPlayerPerksAndItems(player)
+    local info = {
+        name = player and player.DisplayName or "Unknown",
+        username = player and ("@" .. player.Name) or "@unknown",
+        role = "Survivor",
+        equippedItem = "None",
+        perks = { "None", "None", "None" }
+    }
+    if not player then return info end
+
+    if isKiller(player) then
+        info.role = "Killer"
+    else
+        info.role = "Survivor"
+    end
+
+    -- Equipped Item / Weapon
+    local char = player.Character
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") then
+                info.equippedItem = item.Name
+                break
+            end
+        end
+    end
+    if info.equippedItem == "None" and player.Backpack then
+        for _, item in ipairs(player.Backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                info.equippedItem = item.Name .. " (Backpack)"
+                break
+            end
+        end
+    end
+
+    -- Perks Discovery
+    local foundPerks = {}
+
+    local function extractPerkName(val)
+        if typeof(val) == "string" and val ~= "" and val ~= "None" and #val < 40 and not val:find(":") and not val:find("table") then
+            return val
+        end
+        return nil
+    end
+
+    local function scanAttributes(obj)
+        if not obj then return end
+        for _, slotKey in ipairs({"Slot1", "Slot2", "Slot3", "Perk1", "Perk2", "Perk3", "Perk_1", "Perk_2", "Perk_3", "PerkOne", "PerkTwo", "PerkThree", "ActivePerk1", "ActivePerk2", "ActivePerk3"}) do
+            local pName = extractPerkName(obj:GetAttribute(slotKey))
+            if pName and not table.find(foundPerks, pName) then
+                table.insert(foundPerks, pName)
+            end
+        end
+        local allAttrs = obj:GetAttributes()
+        for k, v in pairs(allAttrs) do
+            if typeof(k) == "string" and k:lower():find("perk") then
+                local pName = extractPerkName(v)
+                if pName and not table.find(foundPerks, pName) then
+                    table.insert(foundPerks, pName)
+                end
+            end
+        end
+    end
+
+    scanAttributes(player)
+    scanAttributes(char)
+
+    local function scanFolders(parent)
+        if not parent then return end
+        for _, child in ipairs(parent:GetChildren()) do
+            local cName = child.Name:lower()
+            if cName:find("perk") or cName:find("loadout") or cName:find("slot") or cName:find("equipped") then
+                if child:IsA("StringValue") then
+                    local pName = extractPerkName(child.Value)
+                    if pName and not table.find(foundPerks, pName) then
+                        table.insert(foundPerks, pName)
+                    end
+                elseif child:IsA("Folder") or child:IsA("Configuration") then
+                    for _, sub in ipairs(child:GetChildren()) do
+                        if sub:IsA("StringValue") then
+                            local pName = extractPerkName(sub.Value)
+                            if pName and not table.find(foundPerks, pName) then
+                                table.insert(foundPerks, pName)
+                            end
+                        elseif sub:IsA("ValueBase") then
+                            local pName = extractPerkName(tostring(sub.Value))
+                            if pName and not table.find(foundPerks, pName) then
+                                table.insert(foundPerks, pName)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    scanFolders(player)
+    scanFolders(char)
+
+    -- Scan ReplicatedStorage
+    pcall(function()
+        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Perks"}) do
+            local f = ReplicatedStorage:FindFirstChild(fName)
+            if f then
+                local pFolder = f:FindFirstChild(player.Name) or f:FindFirstChild(tostring(player.UserId))
+                if pFolder then
+                    scanAttributes(pFolder)
+                    scanFolders(pFolder)
+                end
+            end
+        end
+    end)
+
+    -- Scan PlayerGui for LocalPlayer / Spectator
+    pcall(function()
+        local pg = player:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            local spec = pg:FindFirstChild("Spectator") or pg:FindFirstChild("Inventory") or pg:FindFirstChild("Menu") or pg:FindFirstChild("Lobby")
+            if spec then
+                for _, desc in ipairs(spec:GetDescendants()) do
+                    if desc:IsA("TextLabel") and desc.Visible then
+                        local txt = desc.Text
+                        if txt and #txt < 35 and desc.Name:lower():find("perk") then
+                            local pName = extractPerkName(txt)
+                            if pName and not table.find(foundPerks, pName) then
+                                table.insert(foundPerks, pName)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    for i = 1, 3 do
+        if foundPerks[i] then
+            info.perks[i] = foundPerks[i]
+        else
+            info.perks[i] = "None (Empty Slot)"
+        end
+    end
+
+    return info
+end
+
+----------------------------------------------------------------------
+-- COMBAT & AUTO PARRY ENGINE (PARRYING DAGGER)
+----------------------------------------------------------------------
+
+local lastParryTick = 0
+local parriedTracks = {}
+local combatBoundAnimators = {}
+
+local IgnoreAnimKeywords = {
+    "walk", "run", "idle", "sprint", "fall", "jump", "land", "crouch",
+    "vault", "climb", "emote", "dance", "sit", "breathe", "turn", "inspect",
+    "repair", "heal", "door", "pickup", "drop", "generator", "interact",
+    "carried", "carry", "hook", "unhook", "wiggle", "struggle", "fix",
+    "stun", "blind", "flashed", "daze", "dazed", "headache", "stumble",
+    "pallet", "wipe", "cool", "recover", "miss"
+}
+
+local AttackAnimKeywords = {
+    "attack", "swing", "slash", "hit", "strike", "m1", "machete", "knife",
+    "cleave", "chop", "down", "combat", "slasher", "weapon", "swipe"
+}
+
+local function isAttackAnimation(track)
+    if not track then return false end
+    if track.Looped == true then return false end
+
+    local tName = (track.Name or ""):lower()
+    local animId = ""
+    if track.Animation then
+        animId = tostring(track.Animation.AnimationId or ""):lower()
+        local aName = (track.Animation.Name or ""):lower()
+        tName = tName .. " " .. aName
+    end
+
+    for _, ign in ipairs(IgnoreAnimKeywords) do
+        if tName:find(ign) and not (tName:find("attack") or tName:find("swing") or tName:find("slash") or tName:find("hit") or tName:find("strike") or tName:find("m1")) then
+            return false
+        end
+    end
+
+    for _, kw in ipairs(AttackAnimKeywords) do
+        if tName:find(kw) or animId:find(kw) then
+            return true
+        end
+    end
+
+    local prio = track.Priority
+    local isActionPrio = (prio == Enum.AnimationPriority.Action 
+        or prio == Enum.AnimationPriority.Action2 
+        or prio == Enum.AnimationPriority.Action3 
+        or prio == Enum.AnimationPriority.Action4 
+        or tostring(prio):find("Action"))
+
+    local len = track.Length or 0
+    if isActionPrio and len > 0.15 and len < 2.5 and track.WeightCurrent > 0.1 then
+        return true
+    end
+
+    return false
+end
+
+local function getParryingDagger()
+    local char = LocalPlayer.Character
+    if char then
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") then
+                local n = item.Name:lower()
+                if n:find("parry") or n:find("dagger") then
+                    return item, true
+                end
+            end
+        end
+    end
+    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+            if item:IsA("Tool") then
+                local n = item.Name:lower()
+                if n:find("parry") or n:find("dagger") then
+                    return item, false
+                end
+            end
+        end
+    end
+    return nil, false
+end
+
+local function executeParry(source)
+    if not (Toggles.AutoParry and Toggles.AutoParry.Value) and source ~= "MANUAL_TEST" then
+        return false
+    end
+    if isKiller(LocalPlayer) then return false end
+
+    local now = tick()
+    if now - lastParryTick < 0.90 then return false end
+    lastParryTick = now
+
+    task.spawn(function()
+        local myChar = LocalPlayer.Character
+        local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+        local daggerTool, isEquipped = getParryingDagger()
+
+        -- 1. Auto equip Parrying Dagger if it's currently in backpack
+        if daggerTool and not isEquipped and hum then
+            pcall(function() hum:EquipTool(daggerTool) end)
+            task.wait(0.02)
+        end
+
+        local mPos = UserInputService:GetMouseLocation()
+
+        -- 2. Pure Right-Click (MouseButton2: triggers Parrying Dagger stance)
+        pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1)
+        end)
+        if mouse2press then
+            pcall(mouse2press)
+        elseif mouse2click then
+            pcall(mouse2click)
+        end
+        pcall(function()
+            VirtualUser:Button2Down(Vector2.new(mPos.X, mPos.Y))
+        end)
+
+        -- 2B. Tool Activation and Remotes
+        if daggerTool then
+            pcall(function()
+                if daggerTool.Activate then
+                    daggerTool:Activate()
+                end
+                for _, rem in ipairs(daggerTool:GetDescendants()) do
+                    if rem:IsA("RemoteEvent") then
+                        local rName = rem.Name:lower()
+                        if rName:find("parry") or rName:find("guard") or rName:find("block") or rName:find("counter") or rName:find("use") or rName:find("activate") then
+                            rem:FireServer()
+                        end
+                    end
+                end
+            end)
+        end
+        pcall(function()
+            for _, name in ipairs({"Parry", "ParryEvent", "GuardEvent", "BlockEvent", "UseParry"}) do
+                local r = ReplicatedStorage:FindFirstChild(name, true)
+                if r and r:IsA("RemoteEvent") then
+                    r:FireServer()
+                end
+            end
+        end)
+
+        -- 2C. Mobile Parry Button Trigger
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if pg then
+                local mob = pg:FindFirstChild("Survivor-mob")
+                if mob then
+                    for _, d in ipairs(mob:GetDescendants()) do
+                        if (d:IsA("ImageButton") or d:IsA("TextButton")) and d.Visible then
+                            local dName = d.Name:lower()
+                            if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") then
+                                if firesignal then
+                                    firesignal(d.Activated)
+                                    firesignal(d.MouseButton1Click)
+                                elseif d.Activated then
+                                    d.Activated:Fire()
+                                end
+                            end
+                        end
+                    end
+                end
+                for _, desc in ipairs(pg:GetDescendants()) do
+                    if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
+                        local dName = desc.Name:lower()
+                        if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") then
+                            if firesignal then
+                                firesignal(desc.Activated)
+                                firesignal(desc.MouseButton1Click)
+                            elseif desc.Activated then
+                                desc.Activated:Fire()
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+
+        -- Hold 150ms to register counter stance
+        task.wait(0.15)
+
+        -- Release Right-Click
+        pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
+        end)
+        if mouse2release then
+            pcall(mouse2release)
+        end
+        pcall(function()
+            VirtualUser:Button2Up(Vector2.new(mPos.X, mPos.Y))
+        end)
+    end)
+    return true
+end
+
+local function checkAndTriggerParry(killerChar, killerPlayer, track)
+    if not (Toggles.AutoParry and Toggles.AutoParry.Value) or not killerChar then return end
+    if isKiller(LocalPlayer) then return end
+    if killerPlayer == LocalPlayer then return end
+
+    local myChar = LocalPlayer.Character
+    local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+    if not myRoot then return end
+
+    local kRoot = killerChar:FindFirstChild("HumanoidRootPart") or killerChar.PrimaryPart
+    if not kRoot or not kRoot:IsA("BasePart") then return end
+
+    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13
+    local dist = (kRoot.Position - myRoot.Position).Magnitude
+    if dist > maxDist then return end
+
+    local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
+    if doFaceCheck then
+        local toMe = (myRoot.Position - kRoot.Position).Unit
+        if kRoot.CFrame.LookVector:Dot(toMe) < 0.15 then return end
+    else
+        local toMe = (myRoot.Position - kRoot.Position).Unit
+        if kRoot.CFrame.LookVector:Dot(toMe) < -0.70 then return end
+    end
+
+    if track then
+        if parriedTracks[track] then return end
+        if not isAttackAnimation(track) then return end
+        parriedTracks[track] = true
+    end
+
+    executeParry("KILLER_ATTACK")
+end
+
+bindCombatListeners = function(player, char)
+    if player == LocalPlayer or not char then return end
+    if not isKiller(player) then return end
+
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if not animator then
+        if hum then
+            local conn = hum.DescendantAdded:Connect(function(desc)
+                if desc:IsA("Animator") then
+                    bindCombatListeners(player, char)
+                end
+            end)
+            connections[#connections + 1] = conn
+        end
+        return
+    end
+
+    if combatBoundAnimators[animator] then return end
+    combatBoundAnimators[animator] = true
+
+    local conn = animator.AnimationPlayed:Connect(function(track)
+        checkAndTriggerParry(char, player, track)
+    end)
+    connections[#connections + 1] = conn
+end
 
 ----------------------------------------------------------------------
 -- SPEED ADJUST, NOCLIP & FLY SYSTEMS
@@ -1315,6 +1774,38 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
         end
         if hum and not (Toggles.AntiStun and Toggles.AntiStun.Value and hum.PlatformStand) then
             hum.PlatformStand = false
+        end
+    end
+
+    -- Custom FOV Handler
+    if Toggles.CustomFOV and Toggles.CustomFOV.Value and Workspace.CurrentCamera then
+        local targetFOV = getFOVValue()
+        if Workspace.CurrentCamera.FieldOfView ~= targetFOV then
+            Workspace.CurrentCamera.FieldOfView = targetFOV
+        end
+    end
+
+    -- Real-time Killer Attack Detection for Auto Parry (Layer 2 real-time scan)
+    if Toggles.AutoParry and Toggles.AutoParry.Value and not isKiller(LocalPlayer) then
+        local myRoot = char:FindFirstChild("HumanoidRootPart")
+        if myRoot then
+            local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and isKiller(player) and player.Character then
+                    local kRoot = player.Character:FindFirstChild("HumanoidRootPart")
+                    if kRoot and (kRoot.Position - myRoot.Position).Magnitude <= maxDist then
+                        local kHum = player.Character:FindFirstChildOfClass("Humanoid")
+                        local kAnim = kHum and kHum:FindFirstChildOfClass("Animator")
+                        if kAnim then
+                            for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
+                                if not parriedTracks[track] and isAttackAnimation(track) then
+                                    checkAndTriggerParry(player.Character, player, track)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
         end
     end
 end)
@@ -1625,6 +2116,193 @@ MovementGroupBox:AddSlider("FlySpeed", {
 })
 
 ----------------------------------------------------------------------
+-- UI ELEMENTS (CAMERA TAB)
+----------------------------------------------------------------------
+
+CameraGroupBox:AddToggle("CustomFOV", {
+    Text = "Custom FOV",
+    Default = false,
+    Callback = function(val)
+        if not val and Workspace.CurrentCamera then
+            Workspace.CurrentCamera.FieldOfView = 70
+        elseif val and Workspace.CurrentCamera then
+            Workspace.CurrentCamera.FieldOfView = getFOVValue()
+        end
+    end,
+})
+
+CameraGroupBox:AddInput("CustomFOVInput", {
+    Default = "70",
+    Numeric = true,
+    Finished = false,
+    Text = "Custom FOV (Input Text)",
+    Tooltip = "Type exact FOV amount (30 to 130)",
+    Placeholder = "Enter FOV (e.g. 70, 90, 110)",
+    Callback = function(val)
+        local num = tonumber(val)
+        if num and num >= 30 and num <= 130 then
+            if Options.FOVValue and Options.FOVValue.Value ~= num then
+                pcall(function() Options.FOVValue:SetValue(num) end)
+            end
+            if Toggles.CustomFOV and Toggles.CustomFOV.Value and Workspace.CurrentCamera then
+                Workspace.CurrentCamera.FieldOfView = num
+            end
+        end
+    end,
+})
+
+CameraGroupBox:AddSlider("FOVValue", {
+    Text = "FOV Value (Slider)",
+    Default = 70,
+    Min = 30,
+    Max = 130,
+    Rounding = 0,
+    Compact = false,
+    Callback = function(val)
+        if Options.CustomFOVInput and Options.CustomFOVInput.Value ~= tostring(val) then
+            pcall(function() Options.CustomFOVInput:SetValue(tostring(val)) end)
+        end
+        if Toggles.CustomFOV and Toggles.CustomFOV.Value and Workspace.CurrentCamera then
+            Workspace.CurrentCamera.FieldOfView = val
+        end
+    end,
+})
+
+CameraGroupBox:AddButton("Reset FOV to Default (70)", function()
+    pcall(function()
+        if Options.CustomFOVInput then
+            Options.CustomFOVInput:SetValue("70")
+        end
+        if Options.FOVValue then
+            Options.FOVValue:SetValue(70)
+        end
+        if Workspace.CurrentCamera then
+            Workspace.CurrentCamera.FieldOfView = 70
+        end
+    end)
+end)
+
+-- Camera Info & Presets (Right Side)
+CameraInfoGroupBox:AddButton("Preset: Default (70)", function()
+    if Options.FOVValue then Options.FOVValue:SetValue(70) end
+end)
+
+CameraInfoGroupBox:AddButton("Preset: Wide (90)", function()
+    if Options.FOVValue then Options.FOVValue:SetValue(90) end
+end)
+
+CameraInfoGroupBox:AddButton("Preset: Ultra-Wide (110)", function()
+    if Options.FOVValue then Options.FOVValue:SetValue(110) end
+end)
+
+CameraInfoGroupBox:AddButton("Preset: Max View (120)", function()
+    if Options.FOVValue then Options.FOVValue:SetValue(120) end
+end)
+
+----------------------------------------------------------------------
+-- UI ELEMENTS (PARRY TAB)
+----------------------------------------------------------------------
+
+-- Left Side: Live Player & Perk Inspector
+LiveUIGroupBox:AddDropdown("LiveInspectTarget", {
+    SpecialType = "Player",
+    ExcludeLocalPlayer = false,
+    Text = "Select Player to Inspect",
+    Tooltip = "Choose any player to inspect their live role, item, and equipped perks",
+    Callback = function()
+        if updateLiveInspector then
+            updateLiveInspector()
+        end
+    end,
+})
+
+LiveUIGroupBox:AddDivider()
+
+local inspectNameLabel = LiveUIGroupBox:AddLabel("< Name >: ...", true)
+local inspectUsernameLabel = LiveUIGroupBox:AddLabel("< @username >: ...", true)
+local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role: ...")
+local inspectItemLabel = LiveUIGroupBox:AddLabel("Equipped Item: ...", true)
+
+LiveUIGroupBox:AddDivider()
+
+local inspectPerkHeader = LiveUIGroupBox:AddLabel("--- Equipped Perks ---")
+local inspectPerk1Label = LiveUIGroupBox:AddLabel("Perk 1: Loading...", true)
+local inspectPerk2Label = LiveUIGroupBox:AddLabel("Perk 2: Loading...", true)
+local inspectPerk3Label = LiveUIGroupBox:AddLabel("Perk 3: Loading...", true)
+
+LiveUIGroupBox:AddDivider()
+
+local function updateLiveInspector()
+    local targetName = Options.LiveInspectTarget and Options.LiveInspectTarget.Value
+    local targetPlayer = (targetName and Players:FindFirstChild(targetName)) or LocalPlayer
+    if not targetPlayer then
+        targetPlayer = Players:GetPlayers()[1] or LocalPlayer
+    end
+
+    local info = getPlayerPerksAndItems(targetPlayer)
+    if inspectNameLabel and inspectNameLabel.SetText then
+        inspectNameLabel:SetText("< " .. info.name .. " >")
+    end
+    if inspectUsernameLabel and inspectUsernameLabel.SetText then
+        inspectUsernameLabel:SetText("< " .. info.username .. " >")
+    end
+    if inspectRoleLabel and inspectRoleLabel.SetText then
+        inspectRoleLabel:SetText("Role: " .. info.role)
+    end
+    if inspectItemLabel and inspectItemLabel.SetText then
+        inspectItemLabel:SetText("Equipped Item: " .. info.equippedItem)
+    end
+    if inspectPerk1Label and inspectPerk1Label.SetText then
+        inspectPerk1Label:SetText("Perk 1: " .. info.perks[1])
+    end
+    if inspectPerk2Label and inspectPerk2Label.SetText then
+        inspectPerk2Label:SetText("Perk 2: " .. info.perks[2])
+    end
+    if inspectPerk3Label and inspectPerk3Label.SetText then
+        inspectPerk3Label:SetText("Perk 3: " .. info.perks[3])
+    end
+end
+
+LiveUIGroupBox:AddButton("Refresh Inspector Now", function()
+    if updateLiveInspector then
+        updateLiveInspector()
+    end
+end)
+
+-- Right Side: Auto Parry (Parrying Dagger)
+AutoParryGroupBox:AddToggle("AutoParry", {
+    Text = "Auto Parry (Parrying Dagger)",
+    Default = false,
+    Tooltip = "Automatically executes 0.8s Parrying Dagger counter stance ONLY when killer hits towards you",
+})
+
+local daggerStatusLabel = AutoParryGroupBox:AddLabel("Dagger Status: Checking...", true)
+
+AutoParryGroupBox:AddDivider()
+
+AutoParryGroupBox:AddSlider("ParryDistance", {
+    Text = "Parry Distance (Studs)",
+    Default = 13,
+    Min = 8,
+    Max = 20,
+    Rounding = 1,
+    Compact = false,
+    Tooltip = "Maximum distance from killer to activate parry stance",
+})
+
+AutoParryGroupBox:AddToggle("ParryFaceCheck", {
+    Text = "Face Check (Killer Facing You)",
+    Default = true,
+    Tooltip = "Only triggers when killer is facing towards you while attacking",
+})
+
+AutoParryGroupBox:AddDivider()
+
+AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
+    executeParry("MANUAL_TEST")
+end)
+
+----------------------------------------------------------------------
 -- EVENT INITIALIZATION
 ----------------------------------------------------------------------
 
@@ -1648,13 +2326,34 @@ connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(desce
     end
 end)
 
--- Role update heartbeat
+-- Live Update Heartbeat (Role ESP, Live UI Inspector & Parrying Dagger Status)
 task.spawn(function()
     while task.wait(1) do
         if Library.Unloaded then break end
-        if Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value then
-            updateAllPlayerHighlights()
-        end
+        pcall(function()
+            if Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value then
+                updateAllPlayerHighlights()
+            end
+
+            -- Update Live Inspector UI
+            if updateLiveInspector then
+                updateLiveInspector()
+            end
+
+            -- Update Parrying Dagger Status
+            if daggerStatusLabel and daggerStatusLabel.SetText then
+                local tool, isEquipped = getParryingDagger()
+                if tool then
+                    if isEquipped then
+                        daggerStatusLabel:SetText("Dagger: Equipped (" .. tool.Name .. ")")
+                    else
+                        daggerStatusLabel:SetText("Dagger: In Backpack (" .. tool.Name .. ")")
+                    end
+                else
+                    daggerStatusLabel:SetText("Dagger: Not Found in Inventory")
+                end
+            end
+        end)
     end
 end)
 
@@ -1805,6 +2504,14 @@ Library:OnUnload(function()
     if FloatingToggleGui then
         pcall(function() FloatingToggleGui:Destroy() end)
     end
+
+    pcall(function()
+        if Workspace.CurrentCamera then
+            Workspace.CurrentCamera.FieldOfView = 70
+        end
+    end)
+    table.clear(parriedTracks)
+    table.clear(combatBoundAnimators)
 end)
 
 ----------------------------------------------------------------------
@@ -1815,7 +2522,7 @@ ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 
 SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ "KeybindMenuOpen", "FloatingButtonOpen" })
+SaveManager:SetIgnoreIndexes({ "KeybindMenuOpen", "FloatingButtonOpen", "LiveInspectTarget" })
 
 ThemeManager:SetFolder("ViolenceDistrict")
 SaveManager:SetFolder("ViolenceDistrict/configs")
@@ -1846,6 +2553,12 @@ pcall(function()
                 local flyNum = tonumber(Options.CustomFlySpeedInput.Value)
                 if flyNum and flyNum <= 150 and Options.FlySpeed.Value ~= flyNum then
                     Options.FlySpeed:SetValue(flyNum)
+                end
+            end
+            if Options.CustomFOVInput and Options.FOVValue then
+                local fovNum = tonumber(Options.CustomFOVInput.Value)
+                if fovNum and fovNum >= 30 and fovNum <= 130 and Options.FOVValue.Value ~= fovNum then
+                    Options.FOVValue:SetValue(fovNum)
                 end
             end
         end)
@@ -1885,8 +2598,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 1.9 Loaded Successfully!",
+        Description = "VD 2.0 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 1.9 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.0 Loaded Successfully! Enjoy!")
 end)

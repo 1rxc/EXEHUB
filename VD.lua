@@ -44,7 +44,9 @@ local Window = Library:CreateWindow({
 
 -- Toggle UI Function: Safely shows or hides the main window on any device
 local function toggleUI()
-    if Window and Window.MainFrame then
+    if Library and Library.Toggle then
+        Library:Toggle()
+    elseif Window and Window.MainFrame then
         local newState = not Window.MainFrame.Visible
         Window.MainFrame.Visible = newState
         Library.Toggled = newState
@@ -53,9 +55,31 @@ local function toggleUI()
                 Window:Toggle(newState)
             end
         end)
-    elseif Library.Toggle then
-        pcall(function() Library:Toggle() end)
     end
+end
+
+-- Dedicated ScreenGui for the Floating Toggle Button (Guarantees visibility across all executors & devices)
+local FloatingScreenGui = Instance.new("ScreenGui")
+FloatingScreenGui.Name = "EXEHUB_FloatingGui"
+FloatingScreenGui.ResetOnSpawn = false
+FloatingScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+FloatingScreenGui.DisplayOrder = 999999
+
+pcall(function()
+    if gethui then
+        FloatingScreenGui.Parent = gethui()
+    elseif (syn and syn.protect_gui) then
+        syn.protect_gui(FloatingScreenGui)
+        FloatingScreenGui.Parent = game:GetService("CoreGui")
+    else
+        FloatingScreenGui.Parent = game:GetService("CoreGui")
+    end
+end)
+
+if not FloatingScreenGui.Parent then
+    pcall(function()
+        FloatingScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+    end)
 end
 
 -- Universal "EXE HUB" Floating Toggle Button (Visible & Draggable on ALL devices)
@@ -70,7 +94,7 @@ FloatingToggleGui.Size = UDim2.fromOffset(80, 32)
 FloatingToggleGui.Position = UDim2.new(0, 18, 0, 75)
 FloatingToggleGui.ZIndex = 2000
 FloatingToggleGui.AutoButtonColor = false
-FloatingToggleGui.Parent = Library.ScreenGui or (Library.Floats and Library.Floats.Parent) or game:GetService("CoreGui")
+FloatingToggleGui.Parent = FloatingScreenGui
 
 local toggleCorner = Instance.new("UICorner")
 toggleCorner.CornerRadius = UDim.new(0, 8)
@@ -1655,6 +1679,9 @@ MenuGroup:AddToggle("FloatingButtonOpen", {
     Default = true,
     Text = "Show EXE HUB Button",
     Callback = function(value)
+        if FloatingScreenGui then
+            FloatingScreenGui.Enabled = value
+        end
         if FloatingToggleGui then
             FloatingToggleGui.Visible = value
         end
@@ -1772,6 +1799,9 @@ Library:OnUnload(function()
     table.clear(generatorHighlights)
     table.clear(trackedGenerators)
 
+    if FloatingScreenGui then
+        pcall(function() FloatingScreenGui:Destroy() end)
+    end
     if FloatingToggleGui then
         pcall(function() FloatingToggleGui:Destroy() end)
     end
@@ -1849,4 +1879,14 @@ task.spawn(function()
             option:OnChanged(triggerAutoSave)
         end
     end
+end)
+
+-- Notify player on successful script initialization
+pcall(function()
+    Library:Notify({
+        Title = "EXE HUB",
+        Description = "VD 1.9 Loaded Successfully!",
+        Time = 6,
+    })
+    print("[EXE HUB] VD 1.9 Loaded Successfully! Enjoy!")
 end)

@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.1 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -66,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9",
+    Footer = "VD 2.9.1",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1156,7 +1156,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.1 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2368,9 +2368,8 @@ local function triggerParryInputs(daggerTool, mPos)
         VirtualUser:Button1Down(Vector2.new(mPos.X, mPos.Y))
     end)
 
-    -- 3. Universal Combat Keypresses (F, E, Q)
+    -- 3. Universal Combat Keypresses (E, Q)
     pcall(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.F, false, game)
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
     end)
@@ -2501,7 +2500,6 @@ local function executeParry(source)
             VirtualUser:Button1Up(Vector2.new(mPos.X, mPos.Y))
         end)
         pcall(function()
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.F, false, game)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
             VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
         end)
@@ -3434,7 +3432,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9)",
+                        Title = "Auto Parry (VD 2.9.1)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3442,7 +3440,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9)",
+                        Title = "Auto Parry (VD 2.9.1)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3964,8 +3962,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9 Loaded Successfully!",
+        Description = "VD 2.9.1 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.1 Loaded Successfully! Enjoy!")
 end)

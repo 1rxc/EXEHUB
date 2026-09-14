@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.3 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.5 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -57,7 +57,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.3",
+    Footer = "VD 2.5",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1116,7 +1116,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.3 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.5 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2031,7 +2031,10 @@ local IgnoreAnimKeywords = {
 
 local AttackAnimKeywords = {
     "attack", "swing", "slash", "hit", "strike", "m1", "machete", "knife",
-    "cleave", "chop", "down", "combat", "slasher", "weapon", "swipe"
+    "cleave", "chop", "down", "combat", "slasher", "weapon", "swipe",
+    "stab", "punish", "heavy", "light", "fire", "shoot", "cast", "dash",
+    "lunge", "kill", "axe", "hammer", "blade", "saw", "chainsaw", "scythe",
+    "club", "fist", "punch", "smash"
 }
 
 local function isAttackAnimation(track)
@@ -2045,22 +2048,26 @@ local function isAttackAnimation(track)
         tName = tName .. " " .. aName
     end
 
-    if track.Looped == true and not (tName:find("attack") or tName:find("swing") or tName:find("slash") or tName:find("hit") or tName:find("strike") or tName:find("m1")) then
-        return false
-    end
-
-    for _, ign in ipairs(IgnoreAnimKeywords) do
-        if tName:find(ign) and not (tName:find("attack") or tName:find("swing") or tName:find("slash") or tName:find("hit") or tName:find("strike") or tName:find("m1")) then
-            return false
-        end
-    end
-
+    -- 1. Explicit attack keywords take highest priority (instant trigger)
     for _, kw in ipairs(AttackAnimKeywords) do
         if tName:find(kw) or animId:find(kw) then
             return true
         end
     end
 
+    -- 2. Non-attack animations to ignore (locomotion, emotes, interactions)
+    for _, ign in ipairs(IgnoreAnimKeywords) do
+        if tName:find(ign) then
+            return false
+        end
+    end
+
+    -- 3. Looped tracks are locomotion or idle unless explicit attack matched above
+    if track.Looped == true then
+        return false
+    end
+
+    -- 4. Action Priority check (Frame-0 detection: NO WeightCurrent delay)
     local prio = track.Priority
     local isActionPrio = (prio == Enum.AnimationPriority.Action 
         or prio == Enum.AnimationPriority.Action2 
@@ -2069,7 +2076,7 @@ local function isAttackAnimation(track)
         or tostring(prio):find("Action"))
 
     local len = track.Length or 0
-    if isActionPrio and len > 0.15 and len < 2.5 and track.WeightCurrent > 0.1 then
+    if isActionPrio and (len == 0 or (len > 0.15 and len < 3.5)) then
         return true
     end
 
@@ -2109,99 +2116,99 @@ local function executeParry(source)
     if isKiller(LocalPlayer) then return false end
 
     local now = tick()
-    if now - lastParryTick < 0.85 then return false end
+    if now - lastParryTick < 0.82 then return false end
     lastParryTick = now
 
-    task.spawn(function()
-        local myChar = LocalPlayer.Character
-        local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
-        local daggerTool, isEquipped = getParryingDagger()
+    local myChar = LocalPlayer.Character
+    local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
+    local daggerTool, isEquipped = getParryingDagger()
 
-        -- 1. Auto equip Parrying Dagger if it's currently in backpack
-        if daggerTool and not isEquipped and hum then
-            pcall(function() hum:EquipTool(daggerTool) end)
-            task.wait(0.03)
-        end
-
-        local mPos = UserInputService:GetMouseLocation()
-
-        -- 2. Pure Right-Click (MouseButton2: Guard stance) and Left-Click (Tool:Activate)
+    -- 1. Synchronously equip Parrying Dagger if in backpack (0ms delay)
+    if daggerTool and not isEquipped and myChar then
         pcall(function()
-            VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1)
-            VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, true, game, 1)
+            daggerTool.Parent = myChar
+            if hum then hum:EquipTool(daggerTool) end
         end)
-        if mouse2press then pcall(mouse2press) end
-        if mouse1press then pcall(mouse1press) end
-        pcall(function()
-            VirtualUser:Button2Down(Vector2.new(mPos.X, mPos.Y))
-            VirtualUser:Button1Down(Vector2.new(mPos.X, mPos.Y))
-        end)
+    end
 
-        -- 2B. Tool Activation and Direct Remotes
-        if daggerTool then
-            pcall(function()
-                if daggerTool.Activate then
-                    daggerTool:Activate()
-                end
-                for _, rem in ipairs(daggerTool:GetDescendants()) do
-                    if rem:IsA("RemoteEvent") then
-                        local rName = rem.Name:lower()
-                        if rName:find("parry") or rName:find("guard") or rName:find("block") or rName:find("counter") or rName:find("use") or rName:find("activate") then
-                            rem:FireServer()
-                        end
+    local mPos = UserInputService:GetMouseLocation()
+
+    -- 2. Immediate zero-latency Input Dispatch (MouseButton2 Guard + MouseButton1 Strike + Tool:Activate)
+    pcall(function()
+        VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, true, game, 1)
+    end)
+    if mouse2press then pcall(mouse2press) end
+    if mouse1press then pcall(mouse1press) end
+    pcall(function()
+        VirtualUser:Button2Down(Vector2.new(mPos.X, mPos.Y))
+        VirtualUser:Button1Down(Vector2.new(mPos.X, mPos.Y))
+    end)
+
+    -- 2B. Direct Tool Activation & Remotes
+    if daggerTool then
+        pcall(function()
+            if daggerTool.Activate then
+                daggerTool:Activate()
+            end
+            for _, rem in ipairs(daggerTool:GetDescendants()) do
+                if rem:IsA("RemoteEvent") then
+                    local rName = rem.Name:lower()
+                    if rName:find("parry") or rName:find("guard") or rName:find("block") or rName:find("counter") or rName:find("use") or rName:find("activate") then
+                        rem:FireServer()
                     end
-                end
-            end)
-        end
-        pcall(function()
-            for _, name in ipairs({"Parry", "ParryEvent", "GuardEvent", "BlockEvent", "UseParry"}) do
-                local r = ReplicatedStorage:FindFirstChild(name, true)
-                if r and r:IsA("RemoteEvent") then
-                    r:FireServer()
                 end
             end
         end)
+    end
+    pcall(function()
+        for _, name in ipairs({"Parry", "ParryEvent", "GuardEvent", "BlockEvent", "UseParry"}) do
+            local r = ReplicatedStorage:FindFirstChild(name, true)
+            if r and r:IsA("RemoteEvent") then
+                r:FireServer()
+            end
+        end
+    end)
 
-        -- 2C. Mobile Parry Button Trigger
-        pcall(function()
-            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-            if pg then
-                local mob = pg:FindFirstChild("Survivor-mob")
-                if mob then
-                    for _, d in ipairs(mob:GetDescendants()) do
-                        if (d:IsA("ImageButton") or d:IsA("TextButton")) and d.Visible then
-                            local dName = d.Name:lower()
-                            if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") then
-                                if firesignal then
-                                    firesignal(d.Activated)
-                                    firesignal(d.MouseButton1Click)
-                                elseif d.Activated then
-                                    d.Activated:Fire()
-                                end
-                            end
-                        end
-                    end
-                end
-                for _, desc in ipairs(pg:GetDescendants()) do
-                    if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
-                        local dName = desc.Name:lower()
+    -- 2C. Mobile Parry Button Trigger
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            local mob = pg:FindFirstChild("Survivor-mob")
+            if mob then
+                for _, d in ipairs(mob:GetDescendants()) do
+                    if (d:IsA("ImageButton") or d:IsA("TextButton")) and d.Visible then
+                        local dName = d.Name:lower()
                         if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") then
                             if firesignal then
-                                firesignal(desc.Activated)
-                                firesignal(desc.MouseButton1Click)
-                            elseif desc.Activated then
-                                desc.Activated:Fire()
+                                firesignal(d.Activated)
+                                firesignal(d.MouseButton1Click)
+                            elseif d.Activated then
+                                d.Activated:Fire()
                             end
                         end
                     end
                 end
             end
-        end)
+            for _, desc in ipairs(pg:GetDescendants()) do
+                if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
+                    local dName = desc.Name:lower()
+                    if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") then
+                        if firesignal then
+                            firesignal(desc.Activated)
+                            firesignal(desc.MouseButton1Click)
+                        elseif desc.Activated then
+                            desc.Activated:Fire()
+                        end
+                    end
+                end
+            end
+        end
+    end)
 
-        -- Hold 150ms to register counter stance
-        task.wait(0.15)
-
-        -- Release Right-Click and Left-Click
+    -- 2D. Hold 180ms to lock counter stance, then cleanly release inputs
+    task.spawn(function()
+        task.wait(0.18)
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, false, game, 1)
@@ -2213,6 +2220,7 @@ local function executeParry(source)
             VirtualUser:Button1Up(Vector2.new(mPos.X, mPos.Y))
         end)
     end)
+
     return true
 end
 
@@ -2228,21 +2236,36 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     local kRoot = killerChar:FindFirstChild("HumanoidRootPart") or killerChar.PrimaryPart
     if not kRoot or not kRoot:IsA("BasePart") then return end
 
-    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13
-    local dist = (kRoot.Position - myRoot.Position).Magnitude
-    if dist > maxDist then return end
+    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 15.0
+    local myPos = myRoot.Position
+    local kPos = kRoot.Position
+    local dist = (kPos - myPos).Magnitude
+
+    -- Dynamic Lunge Compensation: Predicts killer's forward movement during attack
+    local toMe = (myPos - kPos).Unit
+    local kVel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity or Vector3.zero)
+    local myVel = (myRoot.AssemblyLinearVelocity or myRoot.Velocity or Vector3.zero)
+    local relVel = kVel - myVel
+    local closingSpeed = relVel:Dot(toMe)
+    local lungeMargin = math.clamp(closingSpeed * 0.35, 0, 7.5)
+    local effectiveDist = math.max(0, dist - lungeMargin)
+
+    if effectiveDist > maxDist then return end
 
     local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
-    if doFaceCheck and dist > 7.5 then
-        local toMe = (myRoot.Position - kRoot.Position).Unit
-        if kRoot.CFrame.LookVector:Dot(toMe) < 0.10 then return end
+    if doFaceCheck and dist > 8.5 then
+        local isChargingMe = closingSpeed > 3.5
+        if not isChargingMe then
+            local dot = kRoot.CFrame.LookVector:Dot(toMe)
+            if dot < 0.05 then return end
+        end
     end
 
     if track then
         if parriedTracks[track] then return end
         if not isAttackAnimation(track) then return end
         parriedTracks[track] = true
-        task.delay(0.8, function()
+        task.delay(0.85, function()
             parriedTracks[track] = nil
         end)
         pcall(function()
@@ -2259,9 +2282,9 @@ bindCombatListeners = function(player, char)
     if player == LocalPlayer or not char then return end
     if not isKiller(player) then return end
 
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    local animator = char:FindFirstChildWhichIsA("Animator", true)
     if not animator then
+        local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             local conn = hum.DescendantAdded:Connect(function(desc)
                 if desc:IsA("Animator") then
@@ -2270,6 +2293,12 @@ bindCombatListeners = function(player, char)
             end)
             connections[#connections + 1] = conn
         end
+        local conn2 = char.DescendantAdded:Connect(function(desc)
+            if desc:IsA("Animator") then
+                bindCombatListeners(player, char)
+            end
+        end)
+        connections[#connections + 1] = conn2
         return
     end
 
@@ -2409,25 +2438,43 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
         end
     end
 
-    -- Real-time Killer Attack Detection for Auto Parry (Layer 2 real-time scan)
+    -- Real-time Killer Attack Detection for Auto Parry (Layer 2 real-time scan) & Auto Pre-Equip
     if Toggles.AutoParry and Toggles.AutoParry.Value and not isKiller(LocalPlayer) then
         local myRoot = char:FindFirstChild("HumanoidRootPart")
         if myRoot then
-            local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13
+            local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 15.0
+            local nearestKillerDist = 999
             for _, player in ipairs(Players:GetPlayers()) do
                 if player ~= LocalPlayer and isKiller(player) and player.Character then
-                    local kRoot = player.Character:FindFirstChild("HumanoidRootPart")
-                    if kRoot and (kRoot.Position - myRoot.Position).Magnitude <= maxDist then
-                        local kHum = player.Character:FindFirstChildOfClass("Humanoid")
-                        local kAnim = kHum and kHum:FindFirstChildOfClass("Animator")
-                        if kAnim then
-                            for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
-                                if not parriedTracks[track] and isAttackAnimation(track) then
-                                    checkAndTriggerParry(player.Character, player, track)
+                    local kRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character.PrimaryPart
+                    if kRoot and kRoot:IsA("BasePart") then
+                        local d = (kRoot.Position - myRoot.Position).Magnitude
+                        if d < nearestKillerDist then
+                            nearestKillerDist = d
+                        end
+
+                        -- Scan attack animations when within range (allowing 8.0 stud lunge margin)
+                        if d <= (maxDist + 8.0) then
+                            local kAnim = player.Character:FindFirstChildWhichIsA("Animator", true)
+                            if kAnim then
+                                for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
+                                    if not parriedTracks[track] and isAttackAnimation(track) then
+                                        checkAndTriggerParry(player.Character, player, track)
+                                    end
                                 end
                             end
                         end
                     end
+                end
+            end
+
+            -- Auto Pre-Equip Parrying Dagger near Killer for 0ms draw latency
+            if nearestKillerDist <= 28.0 and hum and hum.Health > 0 then
+                local daggerTool, isEquipped = getParryingDagger()
+                if daggerTool and not isEquipped then
+                    pcall(function()
+                        hum:EquipTool(daggerTool)
+                    end)
                 end
             end
         end
@@ -2996,7 +3043,7 @@ end)
 AutoParryGroupBox:AddToggle("AutoParry", {
     Text = "Auto Parry (Parrying Dagger)",
     Default = false,
-    Tooltip = "Automatically executes 0.8s Parrying Dagger counter stance ONLY when killer hits towards you",
+    Tooltip = "Automatically executes 0.8s Parrying Dagger counter stance to protect yourself before killer hits connect",
 })
 
 local daggerStatusLabel = AutoParryGroupBox:AddLabel("Dagger Status: Checking...")
@@ -3005,18 +3052,18 @@ AutoParryGroupBox:AddDivider()
 
 AutoParryGroupBox:AddSlider("ParryDistance", {
     Text = "Parry Distance (Studs)",
-    Default = 13,
+    Default = 15,
     Min = 8,
-    Max = 20,
+    Max = 22,
     Rounding = 1,
     Compact = false,
-    Tooltip = "Maximum distance from killer to activate parry stance",
+    Tooltip = "Maximum distance from killer to activate parry stance (dynamic lunge compensation pre-triggers stance)",
 })
 
 AutoParryGroupBox:AddToggle("ParryFaceCheck", {
     Text = "Face Check (Killer Facing You)",
     Default = true,
-    Tooltip = "Only triggers when killer is facing towards you while attacking",
+    Tooltip = "Only triggers when killer is facing towards you (auto-relaxed at close range & during lunge)",
 })
 
 AutoParryGroupBox:AddDivider()
@@ -3491,8 +3538,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.3 Loaded Successfully!",
+        Description = "VD 2.5 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.3 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.5 Loaded Successfully! Enjoy!")
 end)

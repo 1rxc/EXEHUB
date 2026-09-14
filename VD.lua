@@ -1269,43 +1269,271 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- PLAYER PERK & ITEM DISCOVERY ENGINE (LIVE UI)
+-- PLAYER ITEM & PERK DISCOVERY ENGINE (LIVE UI)
 ----------------------------------------------------------------------
 
+local KnownSurvivorItems = {
+    { key = "parrying dagger", name = "Parrying Dagger" },
+    { key = "parry", name = "Parrying Dagger" },
+    { key = "dagger", name = "Parrying Dagger" },
+    { key = "motion tracker", name = "Motion Tracker" },
+    { key = "tracker", name = "Motion Tracker" },
+    { key = "twist of fate", name = "Twist of Fate" },
+    { key = "twist", name = "Twist of Fate" },
+    { key = "flashlight", name = "Flashlight" },
+    { key = "torch", name = "Flashlight" },
+    { key = "medkit", name = "Medkit" },
+    { key = "first aid", name = "Medkit" },
+    { key = "revolver", name = "Revolver" },
+    { key = "gun", name = "Revolver" },
+    { key = "pistol", name = "Revolver" },
+    { key = "handgun", name = "Revolver" },
+    { key = "toolbox", name = "Toolbox" },
+    { key = "lockpick", name = "Lockpick" },
+    { key = "syringe", name = "Syringe (Adrenaline)" },
+    { key = "adrenaline", name = "Syringe (Adrenaline)" },
+    { key = "candle", name = "Candle" },
+    { key = "shield", name = "Shield" },
+    { key = "toilet paper", name = "Toilet Paper" },
+}
+
+local KnownKillerWeapons = {
+    { key = "machete", name = "Machete" },
+    { key = "cleaver", name = "Cleaver" },
+    { key = "chainsaw", name = "Chainsaw" },
+    { key = "scythe", name = "Scythe" },
+    { key = "cureneedle", name = "Cure Needle" },
+    { key = "needle", name = "Cure Needle" },
+    { key = "claws", name = "Claws" },
+    { key = "claw", name = "Claws" },
+    { key = "axe", name = "Axe" },
+    { key = "hatchet", name = "Hatchet" },
+    { key = "hammer", name = "Hammer" },
+    { key = "sledgehammer", name = "Sledgehammer" },
+    { key = "sickle", name = "Sickle" },
+    { key = "knife", name = "Knife" },
+    { key = "blade", name = "Blade" },
+    { key = "crowbar", name = "Crowbar" },
+    { key = "pipe", name = "Pipe" },
+    { key = "bat", name = "Bat" },
+    { key = "club", name = "Club" },
+}
+
+local function matchKnownItem(rawName)
+    if not rawName or typeof(rawName) ~= "string" or rawName == "" or rawName == "None" or rawName == "nil" then
+        return nil
+    end
+    local lower = rawName:lower()
+    for _, item in ipairs(KnownSurvivorItems) do
+        if lower:find(item.key) then
+            return item.name
+        end
+    end
+    for _, wep in ipairs(KnownKillerWeapons) do
+        if lower:find(wep.key) then
+            return wep.name
+        end
+    end
+    return nil
+end
+
+local function getPlayerEquippedItem(player, isTargetKiller)
+    if not player then return "None" end
+    local char = player.Character
+
+    -- 1. Check Tool actively held in Character hand
+    if char then
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Tool") then
+                local matched = matchKnownItem(child.Name)
+                if matched then
+                    return matched .. " (In Hand)"
+                else
+                    return child.Name .. " (In Hand)"
+                end
+            end
+        end
+    end
+
+    -- 2. Check Backpack (for LocalPlayer or if replicated)
+    local bp = player:FindFirstChildOfClass("Backpack")
+    if bp then
+        for _, child in ipairs(bp:GetChildren()) do
+            if child:IsA("Tool") then
+                local matched = matchKnownItem(child.Name)
+                if matched then
+                    return matched
+                else
+                    return child.Name
+                end
+            end
+        end
+    end
+
+    -- 3. Check Character Descendants for Holstered/Attached Item Models, Tools, or MeshParts
+    if char then
+        for _, desc in ipairs(char:GetDescendants()) do
+            if desc:IsA("Model") or desc:IsA("Tool") or desc:IsA("MeshPart") or desc:IsA("Accessory") or desc:IsA("BasePart") then
+                local dName = desc.Name:lower()
+                if not (dName:find("arm") or dName:find("leg") or dName:find("torso") or dName:find("head") or dName:find("root") or dName:find("hair") or dName:find("shirt") or dName:find("pants") or dName:find("face") or dName:find("attachment")) then
+                    local matched = matchKnownItem(desc.Name)
+                    if matched then
+                        return matched .. " (Equipped)"
+                    end
+                end
+            end
+        end
+    end
+
+    -- 4. Check Attributes on Character and Player
+    local itemAttributeKeys = {
+        "Item", "EquippedItem", "SelectedItem", "SurvivorItem", "CurrentItem",
+        "LoadoutItem", "Weapon", "KillerWeapon", "HeldItem", "ActiveItem",
+        "Tool", "ItemName", "SlotItem", "Item1", "Slot_Item", "EquippedWeapon",
+        "PrimaryItem", "SecondaryItem", "SelectedWeapon", "Equipped_Item"
+    }
+
+    local function scanObjectAttributes(obj)
+        if not obj then return nil end
+        for _, key in ipairs(itemAttributeKeys) do
+            local val = obj:GetAttribute(key)
+            if typeof(val) == "string" and val ~= "" and val ~= "None" and val ~= "nil" then
+                return matchKnownItem(val) or val
+            end
+        end
+        local all = obj:GetAttributes()
+        for k, v in pairs(all) do
+            if typeof(k) == "string" and (k:lower():find("item") or k:lower():find("weapon")) and typeof(v) == "string" and v ~= "" and v ~= "None" then
+                return matchKnownItem(v) or v
+            end
+        end
+        return nil
+    end
+
+    local attrItem = scanObjectAttributes(char) or scanObjectAttributes(player)
+    if attrItem then return attrItem end
+
+    -- 5. Check Folders and ValueObjects in Character and Player
+    local function scanObjectFolders(parent)
+        if not parent then return nil end
+        for _, child in ipairs(parent:GetChildren()) do
+            local cName = child.Name:lower()
+            if cName:find("item") or cName:find("weapon") or cName:find("loadout") or cName:find("inventory") or cName:find("equipped") or cName:find("gear") then
+                if child:IsA("StringValue") and child.Value ~= "" and child.Value ~= "None" then
+                    return matchKnownItem(child.Value) or child.Value
+                elseif child:IsA("ObjectValue") and child.Value then
+                    return matchKnownItem(child.Value.Name) or child.Value.Name
+                elseif child:IsA("Folder") or child:IsA("Configuration") then
+                    for _, sub in ipairs(child:GetChildren()) do
+                        if sub:IsA("StringValue") and sub.Value ~= "" and sub.Value ~= "None" then
+                            local subName = sub.Name:lower()
+                            if subName:find("item") or subName:find("weapon") then
+                                return matchKnownItem(sub.Value) or sub.Value
+                            end
+                            local matched = matchKnownItem(sub.Value)
+                            if matched then return matched end
+                        elseif sub:IsA("Tool") or sub:IsA("Model") then
+                            return matchKnownItem(sub.Name) or sub.Name
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local folderItem = scanObjectFolders(char) or scanObjectFolders(player)
+    if folderItem then return folderItem end
+
+    -- 6. Check ReplicatedStorage Data Folders
+    local repItem = nil
+    pcall(function()
+        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Loadouts", "SurvivorLoadouts", "GameData", "Items"}) do
+            local f = ReplicatedStorage:FindFirstChild(fName)
+            if f then
+                local pf = f:FindFirstChild(player.Name) or f:FindFirstChild(tostring(player.UserId))
+                if pf then
+                    repItem = scanObjectAttributes(pf) or scanObjectFolders(pf)
+                    if repItem then return end
+                end
+            end
+        end
+    end)
+    if repItem then return repItem end
+
+    -- 7. Check Workspace Match & Player Folders
+    local wsItem = nil
+    pcall(function()
+        for _, fName in ipairs({"Game", "Match", "Ingame", "Round", "Survivors", "Killers", "Status", "Players"}) do
+            local f = Workspace:FindFirstChild(fName)
+            if f then
+                local pf = f:FindFirstChild(player.Name) or (char and f:FindFirstChild(char.Name))
+                if pf then
+                    wsItem = scanObjectAttributes(pf) or scanObjectFolders(pf)
+                    if wsItem then return end
+                end
+            end
+        end
+    end)
+    if wsItem then return wsItem end
+
+    -- 8. Check PlayerGui (Spectator, Roster, Scoreboard, Inventory)
+    local guiItem = nil
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            local spec = pg:FindFirstChild("Spectator") or pg:FindFirstChild("Inventory") or pg:FindFirstChild("Menu") or pg:FindFirstChild("Lobby") or pg:FindFirstChild("Scoreboard")
+            if spec then
+                local pFrame = spec:FindFirstChild(player.Name, true) or spec:FindFirstChild(player.DisplayName, true)
+                if pFrame then
+                    for _, desc in ipairs(pFrame:GetDescendants()) do
+                        if desc:IsA("TextLabel") and desc.Visible then
+                            local matched = matchKnownItem(desc.Text)
+                            if matched then
+                                guiItem = matched
+                                return
+                            end
+                        end
+                    end
+                end
+                if player == LocalPlayer then
+                    local browse = spec:FindFirstChild("Browse_loadout_survivor", true) or spec:FindFirstChild("Items", true)
+                    if browse then
+                        for _, desc in ipairs(browse:GetDescendants()) do
+                            if (desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+                                local matched = matchKnownItem(desc.Name) or (desc:IsA("TextLabel") and matchKnownItem(desc.Text))
+                                if matched then
+                                    guiItem = matched
+                                    return
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    if guiItem then return guiItem end
+
+    if isTargetKiller then
+        return "Killer Weapon"
+    end
+
+    return "None (No Item Equipped)"
+end
+
 local function getPlayerPerksAndItems(player)
+    local isTargetKiller = isKiller(player)
     local info = {
         name = player and player.DisplayName or "Unknown",
         username = player and ("@" .. player.Name) or "@unknown",
-        role = "Survivor",
-        equippedItem = "None",
+        role = isTargetKiller and "Killer" or "Survivor",
+        equippedItem = getPlayerEquippedItem(player, isTargetKiller),
         perks = { "None", "None", "None" }
     }
     if not player then return info end
 
-    if isKiller(player) then
-        info.role = "Killer"
-    else
-        info.role = "Survivor"
-    end
-
-    -- Equipped Item / Weapon
     local char = player.Character
-    if char then
-        for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") then
-                info.equippedItem = item.Name
-                break
-            end
-        end
-    end
-    if info.equippedItem == "None" and player.Backpack then
-        for _, item in ipairs(player.Backpack:GetChildren()) do
-            if item:IsA("Tool") then
-                info.equippedItem = item.Name .. " (Backpack)"
-                break
-            end
-        end
-    end
 
     -- Perks Discovery
     local foundPerks = {}
@@ -1317,7 +1545,7 @@ local function getPlayerPerksAndItems(player)
         return nil
     end
 
-    local function scanAttributes(obj)
+    local function scanPerkAttributes(obj)
         if not obj then return end
         for _, slotKey in ipairs({"Slot1", "Slot2", "Slot3", "Perk1", "Perk2", "Perk3", "Perk_1", "Perk_2", "Perk_3", "PerkOne", "PerkTwo", "PerkThree", "ActivePerk1", "ActivePerk2", "ActivePerk3"}) do
             local pName = extractPerkName(obj:GetAttribute(slotKey))
@@ -1336,14 +1564,14 @@ local function getPlayerPerksAndItems(player)
         end
     end
 
-    scanAttributes(player)
-    scanAttributes(char)
+    scanPerkAttributes(player)
+    scanPerkAttributes(char)
 
-    local function scanFolders(parent)
+    local function scanPerkFolders(parent)
         if not parent then return end
         for _, child in ipairs(parent:GetChildren()) do
             local cName = child.Name:lower()
-            if cName:find("perk") or cName:find("loadout") or cName:find("slot") or cName:find("equipped") then
+            if cName:find("perk") or (cName:find("slot") and not cName:find("item")) then
                 if child:IsA("StringValue") then
                     local pName = extractPerkName(child.Value)
                     if pName and not table.find(foundPerks, pName) then
@@ -1368,24 +1596,24 @@ local function getPlayerPerksAndItems(player)
         end
     end
 
-    scanFolders(player)
-    scanFolders(char)
+    scanPerkFolders(player)
+    scanPerkFolders(char)
 
-    -- Scan ReplicatedStorage
+    -- Scan ReplicatedStorage for perks
     pcall(function()
         for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Perks"}) do
             local f = ReplicatedStorage:FindFirstChild(fName)
             if f then
                 local pFolder = f:FindFirstChild(player.Name) or f:FindFirstChild(tostring(player.UserId))
                 if pFolder then
-                    scanAttributes(pFolder)
-                    scanFolders(pFolder)
+                    scanPerkAttributes(pFolder)
+                    scanPerkFolders(pFolder)
                 end
             end
         end
     end)
 
-    -- Scan PlayerGui for LocalPlayer / Spectator
+    -- Scan PlayerGui for perks
     pcall(function()
         local pg = player:FindFirstChildOfClass("PlayerGui")
         if pg then
@@ -2242,12 +2470,20 @@ LiveUIGroupBox:AddDivider()
 local inspectNameLabel = LiveUIGroupBox:AddLabel("< Name >: Select player")
 local inspectUsernameLabel = LiveUIGroupBox:AddLabel("< @username >: None")
 local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role: ...")
-local inspectItemLabel = LiveUIGroupBox:AddLabel("Equipped Item: ...")
 
 pcall(function()
     if inspectNameLabel and inspectNameLabel.TextLabel then inspectNameLabel.TextLabel.RichText = false end
     if inspectUsernameLabel and inspectUsernameLabel.TextLabel then inspectUsernameLabel.TextLabel.RichText = false end
     if inspectRoleLabel and inspectRoleLabel.TextLabel then inspectRoleLabel.TextLabel.RichText = false end
+end)
+
+LiveUIGroupBox:AddDivider()
+
+local inspectItemHeader = LiveUIGroupBox:AddLabel("--- Equipped Item ---")
+local inspectItemLabel = LiveUIGroupBox:AddLabel("Item: Scanning...")
+
+pcall(function()
+    if inspectItemHeader and inspectItemHeader.TextLabel then inspectItemHeader.TextLabel.RichText = false end
     if inspectItemLabel and inspectItemLabel.TextLabel then inspectItemLabel.TextLabel.RichText = false end
 end)
 
@@ -2259,6 +2495,7 @@ local inspectPerk2Label = LiveUIGroupBox:AddLabel("Perk 2: Loading...")
 local inspectPerk3Label = LiveUIGroupBox:AddLabel("Perk 3: Loading...")
 
 pcall(function()
+    if inspectPerkHeader and inspectPerkHeader.TextLabel then inspectPerkHeader.TextLabel.RichText = false end
     if inspectPerk1Label and inspectPerk1Label.TextLabel then inspectPerk1Label.TextLabel.RichText = false end
     if inspectPerk2Label and inspectPerk2Label.TextLabel then inspectPerk2Label.TextLabel.RichText = false end
     if inspectPerk3Label and inspectPerk3Label.TextLabel then inspectPerk3Label.TextLabel.RichText = false end
@@ -2286,7 +2523,8 @@ local function updateLiveInspector()
         inspectRoleLabel:SetText("Role: " .. tostring(info.role))
     end
     if inspectItemLabel and inspectItemLabel.SetText then
-        inspectItemLabel:SetText("Equipped Item: " .. tostring(info.equippedItem))
+        pcall(function() inspectItemLabel.TextLabel.RichText = false end)
+        inspectItemLabel:SetText("Item: " .. tostring(info.equippedItem))
     end
     if inspectPerk1Label and inspectPerk1Label.SetText then
         inspectPerk1Label:SetText("Perk 1: " .. tostring(info.perks[1]))
@@ -2312,7 +2550,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
     Tooltip = "Automatically executes 0.8s Parrying Dagger counter stance ONLY when killer hits towards you",
 })
 
-local daggerStatusLabel = AutoParryGroupBox:AddLabel("Dagger Status: Checking...", true)
+local daggerStatusLabel = AutoParryGroupBox:AddLabel("Dagger Status: Checking...")
 
 AutoParryGroupBox:AddDivider()
 

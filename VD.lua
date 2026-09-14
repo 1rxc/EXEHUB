@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script (Obsidian UI)
+-- Violence District | EXE HUB Script VD 1.9 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Settings
 
@@ -36,7 +36,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 1.0",
+    Footer = "VD 1.9",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -869,10 +869,33 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM
+-- ULTIMATE ANTI STUN SYSTEM (VD 1.9 - NON-BLOCKING & BULLETPROOF)
 ----------------------------------------------------------------------
 
--- 1. Hook and block stun remotes via metamethod
+-- Action Protection: Animations that must NEVER be stopped by AntiStun
+local function isProtectedActionAnim(name)
+    name = name:lower()
+    return name:find("drop")
+        or name:find("pallet")
+        or name:find("vault")
+        or name:find("pull")
+        or name:find("repair")
+        or name:find("gen")
+        or name:find("fix")
+        or name:find("interact")
+        or name:find("action")
+        or name:find("attack")
+        or name:find("swing")
+        or name:find("slash")
+        or name:find("hit")
+        or name:find("wipe")
+        or name:find("m1")
+        or name:find("walk")
+        or name:find("run")
+        or name:find("idle")
+end
+
+-- 1. Hook and block ONLY stun remotes (NEVER block player actions like drop, pallet, or interact)
 pcall(function()
     if hookmetamethod then
         local oldNamecall
@@ -880,8 +903,11 @@ pcall(function()
             local method = getnamecallmethod()
             if (method == "FireServer" or method == "fireServer") and Toggles.AntiStun and Toggles.AntiStun.Value then
                 local name = tostring(self.Name):lower()
-                if name:find("stun") or name:find("blind") or name:find("drop") then
-                    return nil
+                -- NEVER block drop, pallet, interact, repair, or normal player actions
+                if not (name:find("drop") or name:find("pallet") or name:find("interact") or name:find("action") or name:find("repair")) then
+                    if name:find("stun") or name:find("blind") then
+                        return nil
+                    end
                 end
             end
             return oldNamecall(self, ...)
@@ -898,7 +924,7 @@ local function hookStunRemotes()
         for _, desc in ipairs(remotes:GetDescendants()) do
             if desc:IsA("RemoteEvent") then
                 local dName = desc.Name:lower()
-                if dName:find("stun") or dName:find("blind") then
+                if (dName:find("stun") or dName:find("blind")) and not (dName:find("drop") or dName:find("pallet") or dName:find("action")) then
                     local oldFire = desc.FireServer
                     desc.FireServer = function(self, ...)
                         if Toggles.AntiStun and Toggles.AntiStun.Value then
@@ -914,7 +940,7 @@ end
 
 hookStunRemotes()
 
--- 3. High-priority Frame Loop to break stun state, unanchor, cancel stun animation, and restore speed
+-- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if not (Toggles.AntiStun and Toggles.AntiStun.Value) then return end
 
@@ -922,64 +948,84 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
 
-    -- Unanchor character instantly if the game tries to freeze you in place
-    if root and root.Anchored then
-        root.Anchored = false
-    end
+    -- Check if character is genuinely afflicted by a stun or ragdoll
+    local hasStunAttr = (char:GetAttribute("Stunned") == true)
+        or (char:GetAttribute("IsStunned") == true)
+        or (char:GetAttribute("Headache") == true)
+        or (char:GetAttribute("Blinded") == true)
+        or (char:GetAttribute("Slowed") == true)
+        or (char:GetAttribute("Frozen") == true)
 
-    if hum and hum.Health > 0 then
-        -- Cancel ragdoll & falling states
+    local isRagdolled = (hum.PlatformStand == true and not (Toggles.Fly and Toggles.Fly.Value))
+        or (hum:GetState() == Enum.HumanoidStateType.Ragdoll)
+        or (hum:GetState() == Enum.HumanoidStateType.Physics)
+        or (hum:GetState() == Enum.HumanoidStateType.FallingDown)
+        or (hum.Sit == true and not (char:FindFirstChildOfClass("VehicleSeat")))
+
+    -- Break stun immediately only if genuinely stunned
+    if hasStunAttr or isRagdolled then
         hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
         hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
 
-        -- If forced to platform stand or sit, force get up
         if hum.PlatformStand and not (Toggles.Fly and Toggles.Fly.Value) then
             hum.PlatformStand = false
-            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
         end
         if hum.Sit then
             hum.Sit = false
-            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
         end
 
-        -- If WalkSpeed was set to 0 by a stun, immediately restore full speed
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+        hum:ChangeState(Enum.HumanoidStateType.Running)
+
+        -- Unanchor if anchored by stun
+        if root and root.Anchored then
+            root.Anchored = false
+        end
+
+        -- Restore WalkSpeed if zeroed by stun
         local targetSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and Options.SpeedValue and Options.SpeedValue.Value) or defaultSpeed
         if hum.WalkSpeed < 16 then
             hum.WalkSpeed = targetSpeed
         end
 
-        -- Stop any stun / blind animations that lock player actions
+        -- Stop ONLY genuine stun / blind animations (NEVER touch pallet, drop, repair, attack)
         local animator = hum:FindFirstChildOfClass("Animator")
         if animator then
             for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
                 local animName = track.Name:lower()
-                if animName:find("stun") or animName:find("blind") or animName:find("pallet") then
-                    track:Stop(0)
+                if not isProtectedActionAnim(animName) then
+                    if animName:find("stun") or animName:find("blind") or animName:find("headache") then
+                        pcall(function() track:Stop(0) end)
+                    end
                 end
+            end
+        end
+
+        -- Clear stun attributes
+        for _, attr in ipairs({"Stunned", "Stun", "Slowed", "Frozen", "Blinded", "IsStunned", "Headache"}) do
+            if char:GetAttribute(attr) then
+                char:SetAttribute(attr, false)
             end
         end
     end
 
-    -- Clear all stun / slow attributes
-    for _, attr in ipairs({"Stunned", "Stun", "Slowed", "Frozen", "Blinded", "IsStunned"}) do
-        if char:GetAttribute(attr) then
-            char:SetAttribute(attr, false)
-        end
-    end
+    -- Safeguard: Always ensure movement is enabled
     if char:GetAttribute("CanMove") == false then
         char:SetAttribute("CanMove", true)
     end
 
-    -- Remove any stun BoolValues/StringValues inserted into character
+    -- Safeguard: Ensure Tools in character are always enabled for Left/Right Click
     for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Tool") and not child.Enabled then
+            child.Enabled = true
+        end
         if child:IsA("ValueBase") then
             local cName = child.Name:lower()
             if cName:find("stun") or cName:find("blind") or cName:find("freeze") then
-                if child:IsA("BoolValue") then
+                if child:IsA("BoolValue") and child.Value == true then
                     child.Value = false
-                else
-                    pcall(function() child:Destroy() end)
                 end
             end
         end
@@ -1224,6 +1270,34 @@ PlayerGroupBox:AddToggle("AntiStun", {
     Text = "Anti Stun",
     Default = false,
 })
+
+PlayerGroupBox:AddButton("Fix Controls / Unstick", function()
+    pcall(function()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if root then root.Anchored = false end
+        if hum then
+            hum.PlatformStand = false
+            hum.Sit = false
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            hum:ChangeState(Enum.HumanoidStateType.Running)
+            hum.WalkSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and Options.SpeedValue and Options.SpeedValue.Value) or defaultSpeed
+        end
+        for _, attr in ipairs({"Stunned", "IsStunned", "Slowed", "Frozen", "Blinded", "Headache", "Interacting", "Busy", "Action", "InAction"}) do
+            if char:GetAttribute(attr) ~= nil then
+                char:SetAttribute(attr, false)
+            end
+        end
+        char:SetAttribute("CanMove", true)
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Tool") then
+                item.Enabled = true
+            end
+        end
+    end)
+end)
 
 -- Right Side: Movement Box
 local SpeedToggle = MovementGroupBox:AddToggle("SpeedAdjust", {

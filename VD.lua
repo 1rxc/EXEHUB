@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.7 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.8 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -66,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.7",
+    Footer = "VD 2.8",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1143,7 +1143,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.7 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.8 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2069,13 +2069,13 @@ local lastParryTick = 0
 local parriedTracks = {}
 local combatBoundAnimators = {}
 
-local IgnoreAnimKeywords = {
-    "walk", "run", "idle", "sprint", "fall", "jump", "land", "crouch",
-    "vault", "climb", "emote", "dance", "sit", "breathe", "turn", "inspect",
-    "repair", "heal", "door", "pickup", "drop", "generator", "interact",
-    "carried", "carry", "hook", "unhook", "wiggle", "struggle", "fix",
+local NonDamageActionKeywords = {
+    "generator", "pallet", "door", "pickup", "drop", "hook", "unhook",
+    "carry", "carried", "vault", "climb", "repair", "heal", "struggle",
+    "wiggle", "fix", "inspect", "search", "locker", "kick", "damage_gen",
+    "break_pallet", "break", "destroy", "wipe", "cool", "recover", "miss",
     "stun", "blind", "flashed", "daze", "dazed", "headache", "stumble",
-    "pallet", "wipe", "cool", "recover", "miss"
+    "emote", "dance", "sit", "breathe", "chest", "open", "close"
 }
 
 local AttackAnimKeywords = {
@@ -2084,6 +2084,10 @@ local AttackAnimKeywords = {
     "stab", "punish", "heavy", "light", "fire", "shoot", "cast", "dash",
     "lunge", "kill", "axe", "hammer", "blade", "saw", "chainsaw", "scythe",
     "club", "fist", "punch", "smash"
+}
+
+local LocomotionKeywords = {
+    "walk", "run", "idle", "sprint", "fall", "jump", "land", "crouch", "turn"
 }
 
 local function isAttackAnimation(track)
@@ -2097,26 +2101,33 @@ local function isAttackAnimation(track)
         tName = tName .. " " .. aName
     end
 
-    -- 1. Explicit attack keywords take highest priority (instant trigger)
+    -- 1. Ignore non-damaging environmental, interaction & recovery actions first
+    for _, nonDmg in ipairs(NonDamageActionKeywords) do
+        if tName:find(nonDmg) or animId:find(nonDmg) then
+            return false
+        end
+    end
+
+    -- 2. Looped tracks are locomotion or idle unless explicit attack matched
+    if track.Looped == true then
+        return false
+    end
+
+    -- 3. Explicit attack keywords take highest priority
     for _, kw in ipairs(AttackAnimKeywords) do
         if tName:find(kw) or animId:find(kw) then
             return true
         end
     end
 
-    -- 2. Non-attack animations to ignore (locomotion, emotes, interactions)
-    for _, ign in ipairs(IgnoreAnimKeywords) do
-        if tName:find(ign) then
+    -- 4. Ignore locomotion keywords if no attack keyword matched
+    for _, loco in ipairs(LocomotionKeywords) do
+        if tName:find(loco) then
             return false
         end
     end
 
-    -- 3. Looped tracks are locomotion or idle unless explicit attack matched above
-    if track.Looped == true then
-        return false
-    end
-
-    -- 4. Action Priority check (Frame-0 detection: NO WeightCurrent delay)
+    -- 5. Action Priority check (Frame-0 detection: NO WeightCurrent delay)
     local prio = track.Priority
     local isActionPrio = (prio == Enum.AnimationPriority.Action 
         or prio == Enum.AnimationPriority.Action2 
@@ -2293,7 +2304,12 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     if isKiller(LocalPlayer) then return end
     if killerPlayer == LocalPlayer then return end
 
-    -- Strict Item Check: Player CANNOT activate auto parry without Parrying Dagger!
+    -- 1. Attacker MUST be the Killer! Ignore hits from fellow survivors / other players
+    if killerPlayer and not isKiller(killerPlayer) then
+        return
+    end
+
+    -- 2. Strict Item Check: Player CANNOT activate auto parry without Parrying Dagger!
     local daggerTool = getParryingDagger()
     if not daggerTool then
         return
@@ -2306,31 +2322,87 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     local kRoot = killerChar:FindFirstChild("HumanoidRootPart") or killerChar.PrimaryPart
     if not kRoot or not kRoot:IsA("BasePart") then return end
 
-    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 15.0
     local myPos = myRoot.Position
     local kPos = kRoot.Position
     local dist = (kPos - myPos).Magnitude
 
-    -- Dynamic Lunge Compensation: Predicts killer's forward movement during attack
+    -- 3. Elevation Check: Attacks cannot hit or penetrate across different floors/elevations
+    local yDiff = math.abs(kPos.Y - myPos.Y)
+    if yDiff > 6.0 then
+        return
+    end
+
+    -- 4. Line of Sight / Obstacle Raycast Check: Cannot damage through solid walls or doors
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = { killerChar, myChar, Workspace.CurrentCamera }
+    rayParams.IgnoreWater = true
+
+    local rayOrigin = kRoot.Position + Vector3.new(0, 1.2, 0)
+    local rayTarget = myRoot.Position + Vector3.new(0, 1.2, 0)
+    local rayDir = rayTarget - rayOrigin
+    local rayHit = Workspace:Raycast(rayOrigin, rayDir, rayParams)
+
+    if rayHit and rayHit.Instance and rayHit.Instance.CanCollide then
+        return -- Solid wall or barrier blocking attack path; hit cannot damage player
+    end
+
+    -- 5. Trajectory & Aim Cone Check: Killer MUST be facing and swinging towards local player
     local toMe = (myPos - kPos).Unit
+    local kLook = kRoot.CFrame.LookVector
+    local aimDot = kLook:Dot(toMe)
+
+    local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
+    if doFaceCheck then
+        if aimDot < 0.20 then
+            return -- Facing away / swinging at something else; cannot damage player
+        end
+    else
+        if aimDot < 0.0 then
+            return -- Facing completely away
+        end
+    end
+
+    -- 6. Dynamic Lunge & Velocity Compensation:
     local kVel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity or Vector3.zero)
     local myVel = (myRoot.AssemblyLinearVelocity or myRoot.Velocity or Vector3.zero)
     local relVel = kVel - myVel
     local closingSpeed = relVel:Dot(toMe)
+
+    -- If killer is moving away from the player (running away, closingSpeed < -3.0) and not point-blank,
+    -- the attack will fall short and miss
+    if closingSpeed < -3.0 and dist > 7.0 then
+        return
+    end
+
+    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 15.0
     local lungeMargin = math.clamp(closingSpeed * 0.35, 0, 7.5)
     local effectiveDist = math.max(0, dist - lungeMargin)
 
-    if effectiveDist > maxDist then return end
+    if effectiveDist > maxDist then
+        return
+    end
 
-    local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
-    if doFaceCheck and dist > 8.5 then
-        local isChargingMe = closingSpeed > 3.5
-        if not isChargingMe then
-            local dot = kRoot.CFrame.LookVector:Dot(toMe)
-            if dot < 0.05 then return end
+    -- 7. Target Focus: If killer is attacking another survivor who is closer and local player is not in cleave range
+    if dist > 8.5 then
+        for _, otherPlayer in ipairs(Players:GetPlayers()) do
+            if otherPlayer ~= LocalPlayer and otherPlayer ~= killerPlayer and otherPlayer.Character then
+                local oRoot = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if oRoot and oRoot:IsA("BasePart") then
+                    local oPos = oRoot.Position
+                    local oDist = (oPos - kPos).Magnitude
+                    if oDist < 5.0 and oDist < (dist - 4.0) then
+                        local toOther = (oPos - kPos).Unit
+                        if kLook:Dot(toOther) > 0.85 then
+                            return -- Killer is locked onto another survivor in their crosshairs
+                        end
+                    end
+                end
+            end
         end
     end
 
+    -- 8. Animation Verification & Track Debounce
     if track then
         if parriedTracks[track] then return end
         if not isAttackAnimation(track) then return end
@@ -2345,6 +2417,7 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         end)
     end
 
+    -- 9. Guaranteed Protection Execution
     executeParry("KILLER_ATTACK")
 end
 
@@ -3113,14 +3186,14 @@ end)
 AutoParryGroupBox:AddToggle("AutoParry", {
     Text = "Auto Parry (Parrying Dagger)",
     Default = false,
-    Tooltip = "Can only activate if you have Parrying Dagger in inventory. Executes 0.8s counter stance before killer hits.",
+    Tooltip = "100% Protection: Only parries when killer's hit is aimed to damage you. Ignores other players, misses, walls & non-damaging hits.",
     Callback = function(val)
         if val then
             local dagger = getParryingDagger()
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.7)",
+                        Title = "Auto Parry (VD 2.8)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3128,8 +3201,8 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.7)",
-                        Description = "Parrying Dagger verified! Auto Parry is active and ready to defend you.",
+                        Title = "Auto Parry (VD 2.8)",
+                        Description = "Parrying Dagger verified! 100% Protection Active: Will parry only lethal killer strikes aimed at you.",
                         Time = 4,
                     })
                 end)
@@ -3153,9 +3226,9 @@ AutoParryGroupBox:AddSlider("ParryDistance", {
 })
 
 AutoParryGroupBox:AddToggle("ParryFaceCheck", {
-    Text = "Face Check (Killer Facing You)",
+    Text = "Face & Trajectory Check",
     Default = true,
-    Tooltip = "Only triggers when killer is facing towards you (auto-relaxed at close range & during lunge)",
+    Tooltip = "Strictly requires the killer to be facing/aiming towards you with clear line-of-sight. Prevents wasting parries when killer hits walls or other players.",
 })
 
 AutoParryGroupBox:AddDivider()
@@ -3641,8 +3714,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.7 Loaded Successfully!",
+        Description = "VD 2.8 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.7 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.8 Loaded Successfully! Enjoy!")
 end)

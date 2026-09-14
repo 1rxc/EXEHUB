@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.1 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.2 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Settings
 
@@ -57,7 +57,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.1",
+    Footer = "VD 2.2",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1104,7 +1104,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.1 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.2 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -1618,9 +1618,9 @@ local function getPlayerEquippedItem(player, isTargetKiller)
             if child:IsA("Tool") then
                 local matched = matchKnownItem(child.Name)
                 if matched then
-                    return matched .. " (In Hand)"
+                    return matched
                 else
-                    return child.Name .. " (In Hand)"
+                    return child.Name
                 end
             end
         end
@@ -1649,7 +1649,7 @@ local function getPlayerEquippedItem(player, isTargetKiller)
                 if not (dName:find("arm") or dName:find("leg") or dName:find("torso") or dName:find("head") or dName:find("root") or dName:find("hair") or dName:find("shirt") or dName:find("pants") or dName:find("face") or dName:find("attachment")) then
                     local matched = matchKnownItem(desc.Name) or (desc.Parent and matchKnownItem(desc.Parent.Name))
                     if matched then
-                        return matched .. " (Equipped)"
+                        return matched
                     end
                 end
             end
@@ -1719,7 +1719,7 @@ local function getPlayerEquippedItem(player, isTargetKiller)
     -- 6. Check ReplicatedStorage Data Folders
     local repItem = nil
     pcall(function()
-        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Loadouts", "SurvivorLoadouts", "GameData", "Items"}) do
+        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Loadouts", "SurvivorLoadouts", "GameData", "Items", "Match", "Game"}) do
             local f = ReplicatedStorage:FindFirstChild(fName)
             if f then
                 local pf = f:FindFirstChild(player.Name) or f:FindFirstChild(tostring(player.UserId))
@@ -1777,7 +1777,7 @@ local function getPlayerEquippedItem(player, isTargetKiller)
             end
             if player == LocalPlayer then
                 local spec = pg:FindFirstChild("Spectator") or pg:FindFirstChild("Inventory") or pg:FindFirstChild("Menu") or pg:FindFirstChild("Lobby")
-                local browse = spec and (spec:FindFirstChild("Browse_loadout_survivor", true) or spec:FindFirstChild("Items", true))
+                local browse = spec and (spec:FindFirstChild("Browse_loadout_survivor", true) or spec:FindFirstChild("Browse_loadout_killer", true) or spec:FindFirstChild("Items", true))
                 if browse then
                     for _, desc in ipairs(browse:GetDescendants()) do
                         if (desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
@@ -1798,13 +1798,13 @@ local function getPlayerEquippedItem(player, isTargetKiller)
         return "Killer Weapon"
     end
 
-    return "None (No Item Equipped)"
+    return "None"
 end
 
 local function getPlayerPerksAndItems(player)
     local isTargetKiller = isKiller(player)
-    local displayName = (player and player.DisplayName ~= "" and player.DisplayName) or (player and player.Name) or "Unknown"
-    local userName = player and ("@" .. player.Name) or "@unknown"
+    local displayName = (player and player.DisplayName ~= "" and player.DisplayName) or (player and player.Name) or "None"
+    local userName = player and ("@" .. player.Name) or "None"
     local info = {
         name = displayName,
         username = userName,
@@ -1820,109 +1820,33 @@ local function getPlayerPerksAndItems(player)
     local foundPerks = {}
 
     local function addPerk(p)
-        if not p or p == "" or p == "None" or #foundPerks >= 3 then return end
-        local matched = matchKnownPerk(p) or p
-        if not matched or matched == "" then return end
-        local ml = matched:lower():gsub("[^%w%s]", ""):gsub("^%s+", ""):gsub("%s+$", "")
-        if ml == "perks" or ml == "perk" or ml == "items" or ml == "item" or ml == "emotes" 
-            or ml == "none" or ml == "empty" or ml:match("^perk%s*%d+$") or ml:match("^slot%s*%d+$") 
-            or ml == "killer" or ml == "survivor" or ml == "title" or ml == "loadout" then
-            return
-        end
-        if not table.find(foundPerks, matched) then
+        if not p or #foundPerks >= 3 then return end
+        local matched = matchKnownPerk(tostring(p))
+        if matched and not table.find(foundPerks, matched) then
             table.insert(foundPerks, matched)
         end
     end
 
-    local function scanPerkAttributes(obj)
-        if not obj then return end
-        for _, slotKey in ipairs({"Slot1", "Slot2", "Slot3", "Perk1", "Perk2", "Perk3", "Perk_1", "Perk_2", "Perk_3", "PerkOne", "PerkTwo", "PerkThree", "ActivePerk1", "ActivePerk2", "ActivePerk3", "EquippedPerks", "SurvivorPerks", "Perks"}) do
-            local val = obj:GetAttribute(slotKey)
-            if typeof(val) == "string" and val ~= "" then
-                for part in val:gmatch("[^,;%s]+") do
-                    addPerk(part)
-                end
-            end
-        end
-        local allAttrs = obj:GetAttributes()
-        for k, v in pairs(allAttrs) do
-            if typeof(k) == "string" and k:lower():find("perk") and typeof(v) == "string" then
-                for part in v:gmatch("[^,;%s]+") do
-                    addPerk(part)
-                end
-            elseif typeof(v) == "string" then
-                local m = matchKnownPerk(v)
-                if m then addPerk(m) end
-            end
-        end
-    end
-
-    scanPerkAttributes(player)
-    scanPerkAttributes(char)
-
-    local function scanPerkFolders(parent)
-        if not parent then return end
-        for _, child in ipairs(parent:GetChildren()) do
-            local cName = child.Name:lower()
-            if cName:find("perk") or (cName:find("slot") and not cName:find("item")) or cName:find("loadout") then
-                -- Check child itself
-                addPerk(child.Name)
-                if child:IsA("StringValue") and child.Value ~= "" then
-                    addPerk(child.Value)
-                elseif child:IsA("ValueBase") and tostring(child.Value) ~= "" then
-                    addPerk(tostring(child.Value))
-                end
-                -- Check sub-children inside perk folder
-                for _, sub in ipairs(child:GetChildren()) do
-                    addPerk(sub.Name)
-                    if sub:IsA("StringValue") and sub.Value ~= "" then
-                        addPerk(sub.Value)
-                    elseif sub:IsA("ValueBase") and tostring(sub.Value) ~= "" then
-                        addPerk(tostring(sub.Value))
-                    end
-                end
-            else
-                local m = matchKnownPerk(child.Name)
-                if m then addPerk(m) end
-            end
-        end
-    end
-
-    scanPerkFolders(player)
-    scanPerkFolders(char)
-
-    -- Scan ReplicatedStorage for perks
-    pcall(function()
-        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Perks", "Loadouts", "SurvivorLoadouts", "GameData", "RoundData"}) do
-            local f = ReplicatedStorage:FindFirstChild(fName)
-            if f then
-                local pFolder = f:FindFirstChild(player.Name) or f:FindFirstChild(tostring(player.UserId))
-                if pFolder then
-                    scanPerkAttributes(pFolder)
-                    scanPerkFolders(pFolder)
-                end
-            end
-        end
-    end)
-
-    -- Scan LocalPlayer PlayerGui (Loadout screen, Spectator, Roster, HUD)
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-        if pg then
-            -- 1. Scan frames around the "Perks" label (shown in loadout menu)
-            for _, desc in ipairs(pg:GetDescendants()) do
-                if desc:IsA("TextLabel") and desc.Text:lower():gsub("%s+", "") == "perks" then
-                    local pFrame = desc.Parent
-                    if pFrame then
-                        -- Check all siblings in the same container frame
-                        for _, sibling in ipairs(pFrame:GetChildren()) do
-                            if sibling ~= desc then
-                                addPerk(sibling.Name)
-                                for _, sub in ipairs(sibling:GetDescendants()) do
-                                    if sub:IsA("ImageLabel") or sub:IsA("ImageButton") or sub:IsA("Frame") or sub:IsA("TextLabel") then
-                                        addPerk(sub.Name)
-                                        if sub:IsA("TextLabel") and sub.Text ~= "" then
-                                            addPerk(sub.Text)
+    -- 1. Check executor environment (getsenv) for local loadout script
+    if getsenv and player == LocalPlayer then
+        pcall(function()
+            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if pg then
+                for _, scr in ipairs(pg:GetDescendants()) do
+                    if scr:IsA("LocalScript") then
+                        local sName = scr.Name:lower()
+                        if sName:find("perk") or sName:find("loadout") or sName:find("inventory") or sName:find("spectat") then
+                            local env = getsenv(scr)
+                            if env and typeof(env) == "table" then
+                                for _, k in ipairs({"EquippedPerks", "equippedPerks", "Equipped_Perks", "Perks", "perks", "Slots", "slots", "Loadout", "loadout", "SurvivorPerks", "ActivePerks"}) do
+                                    local val = env[k]
+                                    if typeof(val) == "table" then
+                                        for _, item in pairs(val) do
+                                            if typeof(item) == "string" then
+                                                addPerk(item)
+                                            elseif typeof(item) == "table" and item.Name then
+                                                addPerk(item.Name)
+                                            end
                                         end
                                     end
                                 end
@@ -1931,28 +1855,132 @@ local function getPlayerPerksAndItems(player)
                     end
                 end
             end
+        end)
+    end
 
-            -- 2. Scan Spectator / In-Game HUD for this specific player
-            local pFrame = pg:FindFirstChild(player.Name, true) or pg:FindFirstChild(player.DisplayName, true)
-            if pFrame then
-                for _, desc in ipairs(pFrame:GetDescendants()) do
-                    if desc:IsA("ImageLabel") or desc:IsA("ImageButton") or desc:IsA("TextLabel") then
-                        local m = matchKnownPerk(desc.Name) or (desc:IsA("TextLabel") and matchKnownPerk(desc.Text))
-                        if m then addPerk(m) end
+    -- 2. Scan Player and Character Attributes
+    local function scanPerkAttributes(obj)
+        if not obj then return end
+        pcall(function()
+            for _, slotKey in ipairs({"Slot1", "Slot2", "Slot3", "Perk1", "Perk2", "Perk3", "Perk_1", "Perk_2", "Perk_3", "PerkOne", "PerkTwo", "PerkThree", "ActivePerk1", "ActivePerk2", "ActivePerk3", "EquippedPerks", "SurvivorPerks", "Perks", "Equipped1", "Equipped2", "Equipped3"}) do
+                local val = obj:GetAttribute(slotKey)
+                if typeof(val) == "string" and val ~= "" then
+                    for part in val:gmatch("[^,;%s]+") do
+                        addPerk(part)
+                    end
+                    addPerk(val)
+                end
+            end
+            local allAttrs = obj:GetAttributes()
+            for k, v in pairs(allAttrs) do
+                if typeof(v) == "string" and v ~= "" then
+                    addPerk(v)
+                end
+            end
+        end)
+    end
+
+    scanPerkAttributes(player)
+    scanPerkAttributes(char)
+
+    -- 3. Scan Player and Character Folders & ValueBases
+    local function scanPerkFolders(parent)
+        if not parent then return end
+        pcall(function()
+            for _, child in ipairs(parent:GetChildren()) do
+                local cName = child.Name:lower()
+                if cName:find("perk") or (cName:find("slot") and not cName:find("item")) or cName:find("loadout") or cName:find("ability") or cName:find("equipped") then
+                    addPerk(child.Name)
+                    if child:IsA("StringValue") and child.Value ~= "" then
+                        addPerk(child.Value)
+                    elseif child:IsA("ValueBase") and tostring(child.Value) ~= "" then
+                        addPerk(tostring(child.Value))
+                    end
+                    scanPerkAttributes(child)
+                    for _, sub in ipairs(child:GetChildren()) do
+                        addPerk(sub.Name)
+                        if sub:IsA("StringValue") and sub.Value ~= "" then
+                            addPerk(sub.Value)
+                        elseif sub:IsA("ValueBase") and tostring(sub.Value) ~= "" then
+                            addPerk(tostring(sub.Value))
+                        end
+                        scanPerkAttributes(sub)
+                    end
+                else
+                    addPerk(child.Name)
+                end
+            end
+        end)
+    end
+
+    scanPerkFolders(player)
+    scanPerkFolders(char)
+
+    -- 4. Scan ReplicatedStorage Data Folders
+    pcall(function()
+        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Perks", "Loadouts", "SurvivorLoadouts", "GameData", "RoundData", "Match", "Game", "Survivors"}) do
+            local f = ReplicatedStorage:FindFirstChild(fName)
+            if f then
+                local pFolder = f:FindFirstChild(player.Name) or f:FindFirstChild(tostring(player.UserId))
+                if pFolder then
+                    scanPerkAttributes(pFolder)
+                    scanPerkFolders(pFolder)
+                end
+                if char then
+                    local cFolder = f:FindFirstChild(char.Name)
+                    if cFolder then
+                        scanPerkAttributes(cFolder)
+                        scanPerkFolders(cFolder)
+                    end
+                end
+            end
+        end
+    end)
+
+    -- 5. Scan PlayerGui (Spectator, Loadout screen, HUD)
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            if player == LocalPlayer then
+                local spec = pg:FindFirstChild("Spectator") or pg:FindFirstChild("Inventory") or pg:FindFirstChild("Menu") or pg:FindFirstChild("Lobby")
+                if spec then
+                    local browse = spec:FindFirstChild("Browse_loadout_survivor", true) or spec:FindFirstChild("Browse_loadout_killer", true) or spec:FindFirstChild("Inventory", true)
+                    if browse then
+                        for _, desc in ipairs(browse:GetDescendants()) do
+                            addPerk(desc.Name)
+                            if desc:IsA("TextLabel") and desc.Text ~= "" then
+                                addPerk(desc.Text)
+                            end
+                            scanPerkAttributes(desc)
+                        end
                     end
                 end
             end
 
-            -- 3. If inspecting LocalPlayer, deep scan all equipped perk buttons/icons
-            if player == LocalPlayer then
+            for _, gui in ipairs(pg:GetChildren()) do
+                if gui:IsA("ScreenGui") or gui:IsA("BillboardGui") then
+                    local pFrame = gui:FindFirstChild(player.Name, true) or gui:FindFirstChild(player.DisplayName, true)
+                    if pFrame then
+                        for _, desc in ipairs(pFrame:GetDescendants()) do
+                            addPerk(desc.Name)
+                            if desc:IsA("TextLabel") and desc.Text ~= "" then
+                                addPerk(desc.Text)
+                            end
+                            scanPerkAttributes(desc)
+                        end
+                    end
+                end
+            end
+
+            if #foundPerks < 3 then
                 for _, desc in ipairs(pg:GetDescendants()) do
-                    if desc:IsA("ImageLabel") or desc:IsA("ImageButton") then
-                        local dName = desc.Name
-                        local m = matchKnownPerk(dName)
-                        if m then
-                            local pName = desc.Parent and desc.Parent.Name:lower() or ""
-                            if pName:find("slot") or pName:find("perk") or pName:find("loadout") or pName:find("equip") or pName:find("survivor") or pName:find("hud") or pName:find("card") then
-                                addPerk(m)
+                    if #foundPerks >= 3 then break end
+                    if desc:IsA("TextLabel") and desc.Visible and desc.Text ~= "" then
+                        local matched = matchKnownPerk(desc.Text)
+                        if matched then
+                            local path = desc:GetFullName():lower()
+                            if player == LocalPlayer or path:find(player.Name:lower()) or path:find(player.DisplayName:lower()) then
+                                addPerk(matched)
                             end
                         end
                     end
@@ -1965,7 +1993,7 @@ local function getPlayerPerksAndItems(player)
         if foundPerks[i] then
             info.perks[i] = foundPerks[i]
         else
-            info.perks[i] = "None (Empty Slot)"
+            info.perks[i] = "None"
         end
     end
 
@@ -2780,10 +2808,10 @@ end)
 ----------------------------------------------------------------------
 
 -- Left Side: Live Player & Perk Inspector
-local currentTargetPlayer = LocalPlayer
+local currentTargetPlayer = nil
 
 local function resolveSelectedPlayer(val)
-    if not val then return nil end
+    if not val or val == "" or val == "None" or val == "nil" then return nil end
     if typeof(val) == "Instance" then
         if val:IsA("Player") and val.Parent == Players then
             return val
@@ -2792,7 +2820,8 @@ local function resolveSelectedPlayer(val)
     end
     if typeof(val) == "table" then
         if val.Name and typeof(val.Name) == "string" then
-            return resolveSelectedPlayer(val.Name)
+            local r = resolveSelectedPlayer(val.Name)
+            if r then return r end
         end
         for _, v in pairs(val) do
             local resolved = resolveSelectedPlayer(v)
@@ -2800,20 +2829,33 @@ local function resolveSelectedPlayer(val)
         end
         return nil
     end
-    if typeof(val) == "string" and val ~= "" then
-        local p = Players:FindFirstChild(val)
+    if typeof(val) == "string" then
+        local str = val:gsub("^%s+", ""):gsub("%s+$", "")
+        if str == "" or str == "None" then return nil end
+
+        local p = Players:FindFirstChild(str)
         if p and p:IsA("Player") then return p end
-        local clean = val:gsub("^%s+", ""):gsub("%s+$", "")
-        p = Players:FindFirstChild(clean)
-        if p and p:IsA("Player") then return p end
+
         for _, pl in ipairs(Players:GetPlayers()) do
-            if pl.Name == clean or pl.DisplayName == clean then
+            if pl.Name == str or pl.DisplayName == str then
                 return pl
             end
-            if pl.Name:lower() == clean:lower() or pl.DisplayName:lower() == clean:lower() then
+            if pl.Name:lower() == str:lower() or pl.DisplayName:lower() == str:lower() then
                 return pl
             end
-            if clean:find(pl.Name, 1, true) or (pl.DisplayName ~= "" and clean:find(pl.DisplayName, 1, true)) then
+        end
+
+        local atUser = str:match("@([%w_]+)")
+        if atUser then
+            p = Players:FindFirstChild(atUser)
+            if p and p:IsA("Player") then return p end
+        end
+
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if str:find(pl.Name, 1, true) or (pl.DisplayName ~= "" and str:find(pl.DisplayName, 1, true)) then
+                return pl
+            end
+            if str:lower():find(pl.Name:lower(), 1, true) then
                 return pl
             end
         end
@@ -2835,9 +2877,9 @@ LiveUIGroupBox:AddDropdown("LiveInspectTarget", {
 
 LiveUIGroupBox:AddDivider()
 
-local inspectNameLabel = LiveUIGroupBox:AddLabel("Name : Select player")
-local inspectUsernameLabel = LiveUIGroupBox:AddLabel("Username : @none")
-local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role : ...")
+local inspectNameLabel = LiveUIGroupBox:AddLabel("Name : None")
+local inspectUsernameLabel = LiveUIGroupBox:AddLabel("Username : None")
+local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role : None")
 
 pcall(function()
     if inspectNameLabel and inspectNameLabel.TextLabel then inspectNameLabel.TextLabel.RichText = false end
@@ -2848,7 +2890,7 @@ end)
 LiveUIGroupBox:AddDivider()
 
 local inspectItemHeader = LiveUIGroupBox:AddLabel("--- Equipped Item ---")
-local inspectItemLabel = LiveUIGroupBox:AddLabel("Item : Scanning...")
+local inspectItemLabel = LiveUIGroupBox:AddLabel("Item : None")
 
 pcall(function()
     if inspectItemHeader and inspectItemHeader.TextLabel then inspectItemHeader.TextLabel.RichText = false end
@@ -2877,15 +2919,50 @@ local function updateLiveInspector(overrideTarget)
         target = Options.LiveInspectTarget.Value
     end
 
-    local resolved = resolveSelectedPlayer(target)
-    if resolved then
-        currentTargetPlayer = resolved
-    elseif not currentTargetPlayer or currentTargetPlayer.Parent ~= Players then
-        currentTargetPlayer = LocalPlayer
+    if target then
+        local resolved = resolveSelectedPlayer(target)
+        if resolved then
+            currentTargetPlayer = resolved
+        end
     end
 
-    local targetPlayer = currentTargetPlayer or LocalPlayer
-    local info = getPlayerPerksAndItems(targetPlayer)
+    if currentTargetPlayer and currentTargetPlayer.Parent ~= Players then
+        currentTargetPlayer = nil
+    end
+
+    if not currentTargetPlayer then
+        if inspectNameLabel and inspectNameLabel.SetText then
+            pcall(function() if inspectNameLabel.TextLabel then inspectNameLabel.TextLabel.RichText = false end end)
+            inspectNameLabel:SetText("Name : None")
+        end
+        if inspectUsernameLabel and inspectUsernameLabel.SetText then
+            pcall(function() if inspectUsernameLabel.TextLabel then inspectUsernameLabel.TextLabel.RichText = false end end)
+            inspectUsernameLabel:SetText("Username : None")
+        end
+        if inspectRoleLabel and inspectRoleLabel.SetText then
+            pcall(function() if inspectRoleLabel.TextLabel then inspectRoleLabel.TextLabel.RichText = false end end)
+            inspectRoleLabel:SetText("Role : None")
+        end
+        if inspectItemLabel and inspectItemLabel.SetText then
+            pcall(function() if inspectItemLabel.TextLabel then inspectItemLabel.TextLabel.RichText = false end end)
+            inspectItemLabel:SetText("Item : None")
+        end
+        if inspectPerk1Label and inspectPerk1Label.SetText then
+            pcall(function() if inspectPerk1Label.TextLabel then inspectPerk1Label.TextLabel.RichText = false end end)
+            inspectPerk1Label:SetText("Perk 1 : None")
+        end
+        if inspectPerk2Label and inspectPerk2Label.SetText then
+            pcall(function() if inspectPerk2Label.TextLabel then inspectPerk2Label.TextLabel.RichText = false end end)
+            inspectPerk2Label:SetText("Perk 2 : None")
+        end
+        if inspectPerk3Label and inspectPerk3Label.SetText then
+            pcall(function() if inspectPerk3Label.TextLabel then inspectPerk3Label.TextLabel.RichText = false end end)
+            inspectPerk3Label:SetText("Perk 3 : None")
+        end
+        return
+    end
+
+    local info = getPlayerPerksAndItems(currentTargetPlayer)
 
     if inspectNameLabel and inspectNameLabel.SetText then
         pcall(function() if inspectNameLabel.TextLabel then inspectNameLabel.TextLabel.RichText = false end end)
@@ -2916,6 +2993,16 @@ local function updateLiveInspector(overrideTarget)
         inspectPerk3Label:SetText("Perk 3 : " .. tostring(info.perks[3]))
     end
 end
+
+LiveUIGroupBox:AddButton("Deselect Player (Reset to None)", function()
+    currentTargetPlayer = nil
+    if Options.LiveInspectTarget then
+        pcall(function() Options.LiveInspectTarget:SetValue(nil) end)
+    end
+    if updateLiveInspector then
+        updateLiveInspector(nil)
+    end
+end)
 
 LiveUIGroupBox:AddButton("Refresh Inspector Now", function()
     if updateLiveInspector then
@@ -3252,8 +3339,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.1 Loaded Successfully!",
+        Description = "VD 2.2 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.1 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.2 Loaded Successfully! Enjoy!")
 end)

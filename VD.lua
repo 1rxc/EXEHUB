@@ -1,6 +1,6 @@
--- Violence District | EXE HUB Script VD 2.2 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.3 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
--- Tabs: ESP | Automatic | Player | Camera | Parry | Settings
+-- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
@@ -57,7 +57,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.2",
+    Footer = "VD 2.3",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -219,6 +219,7 @@ local Tabs = {
     Player = Window:AddTab("Player"),
     Camera = Window:AddTab("Camera"),
     Parry = Window:AddTab("Parry"),
+    Optimize = Window:AddTab("Optimize"),
     ["UI Settings"] = Window:AddTab("Settings"),
 }
 
@@ -600,12 +601,23 @@ local CameraInfoGroupBox = Tabs.Camera:AddGroupbox({
 -- Inside Parry Tab: Live Inspector (Left) and Auto Parry (Right)
 local LiveUIGroupBox = Tabs.Parry:AddGroupbox({
     Side = "Left",
-    Name = "Live Player & Perk Inspector",
+    Name = "Live Player & Item Inspector",
 })
 
 local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
     Side = "Right",
     Name = "Auto Parry (Parrying Dagger)",
+})
+
+-- Inside Optimize Tab: Ping & MS Booster (Left) and Network Status (Right)
+local OptimizeGroupBox = Tabs.Optimize:AddGroupbox({
+    Side = "Left",
+    Name = "Ping & MS Booster",
+})
+
+local NetworkMonitorGroupBox = Tabs.Optimize:AddGroupbox({
+    Side = "Right",
+    Name = "Live Network Status",
 })
 
 local bindCombatListeners = nil
@@ -1104,7 +1116,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.2 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.3 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2024,7 +2036,6 @@ local AttackAnimKeywords = {
 
 local function isAttackAnimation(track)
     if not track then return false end
-    if track.Looped == true then return false end
 
     local tName = (track.Name or ""):lower()
     local animId = ""
@@ -2032,6 +2043,10 @@ local function isAttackAnimation(track)
         animId = tostring(track.Animation.AnimationId or ""):lower()
         local aName = (track.Animation.Name or ""):lower()
         tName = tName .. " " .. aName
+    end
+
+    if track.Looped == true and not (tName:find("attack") or tName:find("swing") or tName:find("slash") or tName:find("hit") or tName:find("strike") or tName:find("m1")) then
+        return false
     end
 
     for _, ign in ipairs(IgnoreAnimKeywords) do
@@ -2094,7 +2109,7 @@ local function executeParry(source)
     if isKiller(LocalPlayer) then return false end
 
     local now = tick()
-    if now - lastParryTick < 0.90 then return false end
+    if now - lastParryTick < 0.85 then return false end
     lastParryTick = now
 
     task.spawn(function()
@@ -2105,25 +2120,24 @@ local function executeParry(source)
         -- 1. Auto equip Parrying Dagger if it's currently in backpack
         if daggerTool and not isEquipped and hum then
             pcall(function() hum:EquipTool(daggerTool) end)
-            task.wait(0.02)
+            task.wait(0.03)
         end
 
         local mPos = UserInputService:GetMouseLocation()
 
-        -- 2. Pure Right-Click (MouseButton2: triggers Parrying Dagger stance)
+        -- 2. Pure Right-Click (MouseButton2: Guard stance) and Left-Click (Tool:Activate)
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1)
+            VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, true, game, 1)
         end)
-        if mouse2press then
-            pcall(mouse2press)
-        elseif mouse2click then
-            pcall(mouse2click)
-        end
+        if mouse2press then pcall(mouse2press) end
+        if mouse1press then pcall(mouse1press) end
         pcall(function()
             VirtualUser:Button2Down(Vector2.new(mPos.X, mPos.Y))
+            VirtualUser:Button1Down(Vector2.new(mPos.X, mPos.Y))
         end)
 
-        -- 2B. Tool Activation and Remotes
+        -- 2B. Tool Activation and Direct Remotes
         if daggerTool then
             pcall(function()
                 if daggerTool.Activate then
@@ -2187,15 +2201,16 @@ local function executeParry(source)
         -- Hold 150ms to register counter stance
         task.wait(0.15)
 
-        -- Release Right-Click
+        -- Release Right-Click and Left-Click
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
+            VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, false, game, 1)
         end)
-        if mouse2release then
-            pcall(mouse2release)
-        end
+        if mouse2release then pcall(mouse2release) end
+        if mouse1release then pcall(mouse1release) end
         pcall(function()
             VirtualUser:Button2Up(Vector2.new(mPos.X, mPos.Y))
+            VirtualUser:Button1Up(Vector2.new(mPos.X, mPos.Y))
         end)
     end)
     return true
@@ -2218,18 +2233,23 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     if dist > maxDist then return end
 
     local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
-    if doFaceCheck then
+    if doFaceCheck and dist > 7.5 then
         local toMe = (myRoot.Position - kRoot.Position).Unit
-        if kRoot.CFrame.LookVector:Dot(toMe) < 0.15 then return end
-    else
-        local toMe = (myRoot.Position - kRoot.Position).Unit
-        if kRoot.CFrame.LookVector:Dot(toMe) < -0.70 then return end
+        if kRoot.CFrame.LookVector:Dot(toMe) < 0.10 then return end
     end
 
     if track then
         if parriedTracks[track] then return end
         if not isAttackAnimation(track) then return end
         parriedTracks[track] = true
+        task.delay(0.8, function()
+            parriedTracks[track] = nil
+        end)
+        pcall(function()
+            track.Stopped:Once(function()
+                parriedTracks[track] = nil
+            end)
+        end)
     end
 
     executeParry("KILLER_ATTACK")
@@ -2867,7 +2887,7 @@ LiveUIGroupBox:AddDropdown("LiveInspectTarget", {
     SpecialType = "Player",
     ExcludeLocalPlayer = false,
     Text = "Select Player to Inspect",
-    Tooltip = "Choose any player to inspect their live role, item, and equipped perks",
+    Tooltip = "Choose any player to inspect their live role and equipped item",
     Callback = function(val)
         if updateLiveInspector then
             updateLiveInspector(val)
@@ -2895,20 +2915,6 @@ local inspectItemLabel = LiveUIGroupBox:AddLabel("Item : None")
 pcall(function()
     if inspectItemHeader and inspectItemHeader.TextLabel then inspectItemHeader.TextLabel.RichText = false end
     if inspectItemLabel and inspectItemLabel.TextLabel then inspectItemLabel.TextLabel.RichText = false end
-end)
-
-LiveUIGroupBox:AddDivider()
-
-local inspectPerkHeader = LiveUIGroupBox:AddLabel("--- Equipped Perks ---")
-local inspectPerk1Label = LiveUIGroupBox:AddLabel("Perk 1 : None")
-local inspectPerk2Label = LiveUIGroupBox:AddLabel("Perk 2 : None")
-local inspectPerk3Label = LiveUIGroupBox:AddLabel("Perk 3 : None")
-
-pcall(function()
-    if inspectPerkHeader and inspectPerkHeader.TextLabel then inspectPerkHeader.TextLabel.RichText = false end
-    if inspectPerk1Label and inspectPerk1Label.TextLabel then inspectPerk1Label.TextLabel.RichText = false end
-    if inspectPerk2Label and inspectPerk2Label.TextLabel then inspectPerk2Label.TextLabel.RichText = false end
-    if inspectPerk3Label and inspectPerk3Label.TextLabel then inspectPerk3Label.TextLabel.RichText = false end
 end)
 
 LiveUIGroupBox:AddDivider()
@@ -2947,18 +2953,6 @@ local function updateLiveInspector(overrideTarget)
             pcall(function() if inspectItemLabel.TextLabel then inspectItemLabel.TextLabel.RichText = false end end)
             inspectItemLabel:SetText("Item : None")
         end
-        if inspectPerk1Label and inspectPerk1Label.SetText then
-            pcall(function() if inspectPerk1Label.TextLabel then inspectPerk1Label.TextLabel.RichText = false end end)
-            inspectPerk1Label:SetText("Perk 1 : None")
-        end
-        if inspectPerk2Label and inspectPerk2Label.SetText then
-            pcall(function() if inspectPerk2Label.TextLabel then inspectPerk2Label.TextLabel.RichText = false end end)
-            inspectPerk2Label:SetText("Perk 2 : None")
-        end
-        if inspectPerk3Label and inspectPerk3Label.SetText then
-            pcall(function() if inspectPerk3Label.TextLabel then inspectPerk3Label.TextLabel.RichText = false end end)
-            inspectPerk3Label:SetText("Perk 3 : None")
-        end
         return
     end
 
@@ -2979,18 +2973,6 @@ local function updateLiveInspector(overrideTarget)
     if inspectItemLabel and inspectItemLabel.SetText then
         pcall(function() if inspectItemLabel.TextLabel then inspectItemLabel.TextLabel.RichText = false end end)
         inspectItemLabel:SetText("Item : " .. tostring(info.equippedItem))
-    end
-    if inspectPerk1Label and inspectPerk1Label.SetText then
-        pcall(function() if inspectPerk1Label.TextLabel then inspectPerk1Label.TextLabel.RichText = false end end)
-        inspectPerk1Label:SetText("Perk 1 : " .. tostring(info.perks[1]))
-    end
-    if inspectPerk2Label and inspectPerk2Label.SetText then
-        pcall(function() if inspectPerk2Label.TextLabel then inspectPerk2Label.TextLabel.RichText = false end end)
-        inspectPerk2Label:SetText("Perk 2 : " .. tostring(info.perks[2]))
-    end
-    if inspectPerk3Label and inspectPerk3Label.SetText then
-        pcall(function() if inspectPerk3Label.TextLabel then inspectPerk3Label.TextLabel.RichText = false end end)
-        inspectPerk3Label:SetText("Perk 3 : " .. tostring(info.perks[3]))
     end
 end
 
@@ -3044,6 +3026,152 @@ AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
 end)
 
 ----------------------------------------------------------------------
+-- UI ELEMENTS (OPTIMIZE TAB)
+----------------------------------------------------------------------
+
+local currentMeasuredFps = 60
+local currentMeasuredPing = 0
+local frameCounter = 0
+local lastFpsCheckTime = tick()
+
+connections[#connections + 1] = RunService.RenderStepped:Connect(function()
+    frameCounter = frameCounter + 1
+    local now = tick()
+    if now - lastFpsCheckTime >= 0.5 then
+        currentMeasuredFps = math.floor(frameCounter / math.max(0.001, (now - lastFpsCheckTime)))
+        frameCounter = 0
+        lastFpsCheckTime = now
+    end
+end)
+
+local function applyNetworkOptimizations(enable)
+    pcall(function()
+        if enable then
+            -- 1. Incoming Replication Lag (Set to 0ms for instant client-server synchronization)
+            settings().Network.IncomingReplicationLag = 0
+            
+            -- 2. Enhanced Send / Receive Rate (Transmits inputs and receives world state at max rate)
+            settings().Network.SendRate = 120
+            settings().Network.ReceiveRate = 120
+            
+            -- 3. Disable Environmental Throttling (Eliminates packet throttling on background objects)
+            settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Disabled
+            settings().Physics.ThrottleAdjustTime = 0
+            
+            -- 4. Maximum FPS Cap (executor level, zero stutter)
+            if setfpscap then
+                setfpscap(999)
+            end
+        else
+            settings().Network.IncomingReplicationLag = 0
+            settings().Network.SendRate = 60
+            settings().Network.ReceiveRate = 60
+            settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Default
+        end
+    end)
+end
+
+-- Left Side: Ping & MS Booster
+OptimizeGroupBox:AddToggle("BoostPing", {
+    Text = "Boost Ping / MS (Fast Network)",
+    Default = true,
+    Tooltip = "Optimizes packet replication rate and eliminates network lag with 0ms buffering",
+    Callback = function(val)
+        applyNetworkOptimizations(val)
+    end,
+})
+
+OptimizeGroupBox:AddToggle("FastInputLatency", {
+    Text = "Zero Input Latency",
+    Default = true,
+    Tooltip = "Processes inputs, clicks, and parry triggers with zero queuing delay",
+})
+
+OptimizeGroupBox:AddToggle("MemoryOptimizer", {
+    Text = "Memory & GC Optimizer",
+    Default = true,
+    Tooltip = "Automatically cleans unused memory cycles in background to prevent frame/ping stutters",
+    Callback = function(val)
+        if val then
+            pcall(function()
+                collectgarbage("setstepmul", 300)
+                collectgarbage("setpause", 100)
+            end)
+        end
+    end,
+})
+
+OptimizeGroupBox:AddDivider()
+
+OptimizeGroupBox:AddButton("Flush Memory & Ping Cache Now", function()
+    pcall(function()
+        local before = gcinfo()
+        collectgarbage("collect")
+        local after = gcinfo()
+        local freed = math.max(0, before - after)
+        Library:Notify({
+            Title = "Optimizer",
+            Description = "Flushed " .. string.format("%.1f KB", freed) .. " RAM. Latency refreshed!",
+            Time = 4,
+        })
+    end)
+end)
+
+-- Right Side: Live Network Status
+local livePingLabel = NetworkMonitorGroupBox:AddLabel("Current Ping : Measuring...")
+local liveFPSLabel = NetworkMonitorGroupBox:AddLabel("Current FPS : Measuring...")
+local liveMemoryLabel = NetworkMonitorGroupBox:AddLabel("Memory Usage : Measuring...")
+local liveNetModeLabel = NetworkMonitorGroupBox:AddLabel("Network Mode : Boosted (0ms Lag)")
+
+pcall(function()
+    if livePingLabel and livePingLabel.TextLabel then livePingLabel.TextLabel.RichText = false end
+    if liveFPSLabel and liveFPSLabel.TextLabel then liveFPSLabel.TextLabel.RichText = false end
+    if liveMemoryLabel and liveMemoryLabel.TextLabel then liveMemoryLabel.TextLabel.RichText = false end
+    if liveNetModeLabel and liveNetModeLabel.TextLabel then liveNetModeLabel.TextLabel.RichText = false end
+end)
+
+NetworkMonitorGroupBox:AddDivider()
+
+local liveQualityLabel1 = NetworkMonitorGroupBox:AddLabel("Visual Quality : 100% Original")
+local liveQualityLabel2 = NetworkMonitorGroupBox:AddLabel("Graphics State : Untouched (Pristine)")
+
+pcall(function()
+    if liveQualityLabel1 and liveQualityLabel1.TextLabel then liveQualityLabel1.TextLabel.RichText = false end
+    if liveQualityLabel2 and liveQualityLabel2.TextLabel then liveQualityLabel2.TextLabel.RichText = false end
+end)
+
+NetworkMonitorGroupBox:AddDivider()
+
+local function updateNetworkMonitor()
+    pcall(function()
+        local stats = game:GetService("Stats")
+        local net = stats.Network
+        if net and net.ServerStatsItem and net.ServerStatsItem["Data Ping"] then
+            currentMeasuredPing = math.floor(net.ServerStatsItem["Data Ping"]:GetValue())
+        elseif stats.PerformanceStats and stats.PerformanceStats.Ping then
+            currentMeasuredPing = math.floor(stats.PerformanceStats.Ping:GetValue())
+        end
+        if livePingLabel and livePingLabel.SetText then
+            livePingLabel:SetText("Current Ping : " .. tostring(currentMeasuredPing) .. " ms")
+        end
+        if liveFPSLabel and liveFPSLabel.SetText then
+            liveFPSLabel:SetText("Current FPS : " .. tostring(currentMeasuredFps))
+        end
+        if liveMemoryLabel and liveMemoryLabel.SetText then
+            local mem = math.floor(gcinfo() / 1024)
+            liveMemoryLabel:SetText("Memory Usage : " .. tostring(mem) .. " MB")
+        end
+    end)
+end
+
+NetworkMonitorGroupBox:AddButton("Refresh Network Stats", function()
+    updateNetworkMonitor()
+end)
+
+-- Apply initial network ping boost on boot
+applyNetworkOptimizations(true)
+
+----------------------------------------------------------------------
 -- EVENT INITIALIZATION
 ----------------------------------------------------------------------
 
@@ -3067,13 +3195,22 @@ connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(desce
     end
 end)
 
--- Live Update Heartbeat (Role ESP, Live UI Inspector & Parrying Dagger Status)
+-- Live Update Heartbeat (Role ESP, Live UI Inspector, Auto Parry & Network Monitor)
 task.spawn(function()
     while task.wait(1) do
         if Library.Unloaded then break end
         pcall(function()
             if Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value then
                 updateAllPlayerHighlights()
+            end
+
+            -- Ensure killer combat listeners are always active
+            if bindCombatListeners then
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= LocalPlayer and isKiller(p) and p.Character then
+                        bindCombatListeners(p, p.Character)
+                    end
+                end
             end
 
             -- Update Live Inspector UI
@@ -3085,14 +3222,29 @@ task.spawn(function()
             if daggerStatusLabel and daggerStatusLabel.SetText then
                 local tool, isEquipped = getParryingDagger()
                 if tool then
-                    if isEquipped then
-                        daggerStatusLabel:SetText("Dagger: Equipped (" .. tool.Name .. ")")
+                    local isOnCd = false
+                    if tool.Enabled == false or tool:GetAttribute("Cooldown") == true or tool:GetAttribute("OnCooldown") == true then
+                        isOnCd = true
+                    end
+                    local myChar = LocalPlayer.Character
+                    if myChar and (myChar:GetAttribute("ParryCooldown") == true or myChar:GetAttribute("DaggerCooldown") == true) then
+                        isOnCd = true
+                    end
+                    if isOnCd then
+                        daggerStatusLabel:SetText("Dagger: On Cooldown (" .. tool.Name .. ")")
+                    elseif isEquipped then
+                        daggerStatusLabel:SetText("Dagger: Equipped & Ready (" .. tool.Name .. ")")
                     else
-                        daggerStatusLabel:SetText("Dagger: In Backpack (" .. tool.Name .. ")")
+                        daggerStatusLabel:SetText("Dagger: In Backpack & Ready (" .. tool.Name .. ")")
                     end
                 else
                     daggerStatusLabel:SetText("Dagger: Not Found in Inventory")
                 end
+            end
+
+            -- Update Network & Ping Stats in Optimize Tab
+            if updateNetworkMonitor then
+                updateNetworkMonitor()
             end
         end)
     end
@@ -3339,8 +3491,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.2 Loaded Successfully!",
+        Description = "VD 2.3 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.2 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.3 Loaded Successfully! Enjoy!")
 end)

@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.0 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.1 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Settings
 
@@ -57,7 +57,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.0",
+    Footer = "VD 2.1",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -752,12 +752,48 @@ local function applyPlayerHighlight(player, character)
     updatePlayerHighlight(player, hl)
 end
 
+local function bindLocalCharacterAntiStun(char)
+    if not char then return end
+    task.spawn(function()
+        local hum = char:WaitForChild("Humanoid", 4)
+        if hum then
+            hum.StateChanged:Connect(function(_, newState)
+                if Toggles.AntiStun and Toggles.AntiStun.Value then
+                    if newState == Enum.HumanoidStateType.Ragdoll 
+                        or newState == Enum.HumanoidStateType.Physics 
+                        or newState == Enum.HumanoidStateType.FallingDown 
+                        or newState == Enum.HumanoidStateType.PlatformStanding then
+                        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+                        hum:ChangeState(Enum.HumanoidStateType.Running)
+                        if cleanStunEffects then cleanStunEffects(char) end
+                    end
+                end
+            end)
+            local animator = hum:WaitForChild("Animator", 4)
+            if animator then
+                animator.AnimationPlayed:Connect(function(track)
+                    if Toggles.AntiStun and Toggles.AntiStun.Value and isStunAnimation and isStunAnimation(track) then
+                        pcall(function()
+                            track:Stop(0)
+                            track.TimePosition = track.Length or 0
+                        end)
+                        if cleanStunEffects then cleanStunEffects(char) end
+                    end
+                end)
+            end
+        end
+    end)
+end
+
 local function setupPlayer(player)
     connections[#connections + 1] = player.CharacterAdded:Connect(function(char)
         task.wait(0.2)
         applyPlayerHighlight(player, char)
         if bindCombatListeners and isKiller(player) then
             bindCombatListeners(player, char)
+        end
+        if player == LocalPlayer then
+            bindLocalCharacterAntiStun(char)
         end
     end)
 
@@ -781,6 +817,9 @@ local function setupPlayer(player)
         applyPlayerHighlight(player, player.Character)
         if bindCombatListeners and isKiller(player) then
             bindCombatListeners(player, player.Character)
+        end
+        if player == LocalPlayer then
+            bindLocalCharacterAntiStun(player.Character)
         end
     end
 end
@@ -937,19 +976,19 @@ local function triggerSkillCheckHit(checkFrame, promptGui)
         end
     end
 
-    -- 2. Dispatch all buttons and interactive elements in SkillCheckPromptGui
+    -- 2. Dispatch all buttons and interactive elements in SkillCheckPromptGui safely
     if promptGui then
         for _, desc in ipairs(promptGui:GetDescendants()) do
-            if desc:IsA("GuiButton") or (desc:IsA("GuiObject") and desc.Name:lower():find("check")) then
+            if desc:IsA("GuiButton") then
                 if firesignal then
                     pcall(function() firesignal(desc.Activated) end)
                     pcall(function() firesignal(desc.MouseButton1Click) end)
                 end
                 if getconnections then
                     for _, sigName in ipairs({"Activated", "MouseButton1Click"}) do
-                        local sig = desc[sigName]
-                        if sig then
-                            pcall(function()
+                        pcall(function()
+                            local sig = desc[sigName]
+                            if sig then
                                 for _, conn in ipairs(getconnections(sig)) do
                                     if conn.Function and conn.Enabled ~= false then
                                         pcall(conn.Function)
@@ -957,8 +996,8 @@ local function triggerSkillCheckHit(checkFrame, promptGui)
                                         pcall(function() conn:Fire() end)
                                     end
                                 end
-                            end)
-                        end
+                            end
+                        end)
                     end
                 end
             end
@@ -1065,14 +1104,27 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 1.9 - NON-BLOCKING & BULLETPROOF)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.1 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
+
+local StunKeywords = {
+    "stun", "blind", "flashed", "flashlight", "daze", "dazed", "headache",
+    "stumble", "palletstun", "ragdoll", "freeze", "frozen"
+}
+
+local StunAttrNames = {
+    "stunned", "isstunned", "stun", "blind", "blinded", "flashed",
+    "ragdoll", "ragdolled", "headache", "palletstun", "frozen", "slowed", "dazed"
+}
 
 -- Action Protection: Animations that must NEVER be stopped by AntiStun
 local function isProtectedActionAnim(name)
     name = name:lower()
+    -- Stuns are NEVER protected!
+    if name:find("stun") or name:find("blind") or name:find("headache") or name:find("daze") or name:find("stumble") or name:find("flashed") then
+        return false
+    end
     return name:find("drop")
-        or name:find("pallet")
         or name:find("vault")
         or name:find("pull")
         or name:find("repair")
@@ -1085,10 +1137,184 @@ local function isProtectedActionAnim(name)
         or name:find("slash")
         or name:find("hit")
         or name:find("wipe")
+        or name:find("cooldown")
         or name:find("m1")
         or name:find("walk")
         or name:find("run")
         or name:find("idle")
+end
+
+local function isStunAnimation(track)
+    if not track then return false end
+    local tName = (track.Name or ""):lower()
+    local animId = ""
+    if track.Animation then
+        animId = tostring(track.Animation.AnimationId or ""):lower()
+        tName = tName .. " " .. (track.Animation.Name or ""):lower()
+    end
+    if isProtectedActionAnim(tName) then
+        return false
+    end
+    for _, kw in ipairs(StunKeywords) do
+        if tName:find(kw) or animId:find(kw) then
+            return true
+        end
+    end
+    return false
+end
+
+-- Speed & Fly Value Helpers (Seamlessly supports both Slider and Custom Text Input)
+local function getSpeedValue()
+    if Options.CustomSpeedInput and Options.CustomSpeedInput.Value then
+        local num = tonumber(Options.CustomSpeedInput.Value)
+        if num and num >= 16 then
+            return num
+        end
+    end
+    if Options.SpeedValue and Options.SpeedValue.Value then
+        return Options.SpeedValue.Value
+    end
+    return 28
+end
+
+local function getFlySpeedValue()
+    if Options.CustomFlySpeedInput and Options.CustomFlySpeedInput.Value then
+        local num = tonumber(Options.CustomFlySpeedInput.Value)
+        if num and num >= 10 then
+            return num
+        end
+    end
+    if Options.FlySpeed and Options.FlySpeed.Value then
+        return Options.FlySpeed.Value
+    end
+    return 50
+end
+
+local function getFOVValue()
+    if Options.CustomFOVInput and Options.CustomFOVInput.Value then
+        local num = tonumber(Options.CustomFOVInput.Value)
+        if num and num >= 30 and num <= 130 then
+            return num
+        end
+    end
+    if Options.FOVValue and Options.FOVValue.Value then
+        return Options.FOVValue.Value
+    end
+    return 70
+end
+
+local function cleanStunEffects(char)
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 then return end
+
+    -- 1. Reset Humanoid State and PlatformStand
+    hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+    hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+
+    if hum.PlatformStand and not (Toggles.Fly and Toggles.Fly.Value) then
+        hum.PlatformStand = false
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+    end
+    if hum.Sit and not (char:FindFirstChildOfClass("VehicleSeat")) then
+        hum.Sit = false
+    end
+
+    local st = hum:GetState()
+    if st == Enum.HumanoidStateType.Ragdoll 
+        or st == Enum.HumanoidStateType.Physics 
+        or st == Enum.HumanoidStateType.FallingDown 
+        or st == Enum.HumanoidStateType.PlatformStanding then
+        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+        hum:ChangeState(Enum.HumanoidStateType.Running)
+    end
+
+    -- 2. Unanchor if anchored by stun
+    if root and root.Anchored then
+        root.Anchored = false
+    end
+
+    -- 3. Restore WalkSpeed if zeroed or slowed by stun
+    local targetSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and getSpeedValue()) or defaultSpeed
+    if hum.WalkSpeed < 16 then
+        hum.WalkSpeed = targetSpeed
+    end
+
+    -- 4. Stop Playing Stun Animations immediately
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+            if isStunAnimation(track) then
+                pcall(function()
+                    track:Stop(0)
+                    track.TimePosition = track.Length or 0
+                end)
+            end
+        end
+    end
+
+    -- 5. Clean Stun Attributes on Character and Player
+    for _, attr in ipairs(StunAttrNames) do
+        if char:GetAttribute(attr) then
+            pcall(function() char:SetAttribute(attr, false) end)
+        end
+        if LocalPlayer:GetAttribute(attr) then
+            pcall(function() LocalPlayer:SetAttribute(attr, false) end)
+        end
+    end
+
+    -- 6. Clean Stun ValueObjects and Constraints
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("ValueBase") then
+            local cName = child.Name:lower()
+            for _, kw in ipairs(StunKeywords) do
+                if cName:find(kw) then
+                    if child:IsA("BoolValue") and child.Value == true then
+                        pcall(function() child.Value = false end)
+                    elseif child:IsA("NumberValue") and child.Value > 0 then
+                        pcall(function() child.Value = 0 end)
+                    end
+                end
+            end
+        elseif child.Name == "RagdollConstraints" or child.Name:lower():find("stun") then
+            pcall(function() child:Destroy() end)
+        end
+    end
+
+    -- 7. Screen Blind / Flashlight GUI cleanup
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if pg then
+        for _, gui in ipairs(pg:GetChildren()) do
+            if gui:IsA("ScreenGui") then
+                local gName = gui.Name:lower()
+                if gName:find("blind") or gName:find("flashlight") or (gName:find("stun") and not gName:find("skill")) then
+                    gui.Enabled = false
+                end
+            end
+        end
+    end
+
+    -- 8. Safeguard: Always ensure movement is enabled
+    if char:GetAttribute("CanMove") == false then
+        pcall(function() char:SetAttribute("CanMove", true) end)
+    end
+    if char:GetAttribute("CanAction") == false then
+        pcall(function() char:SetAttribute("CanAction", true) end)
+    end
+    if char:GetAttribute("CanAttack") == false then
+        pcall(function() char:SetAttribute("CanAttack", true) end)
+    end
+    if char:GetAttribute("CanInteract") == false then
+        pcall(function() char:SetAttribute("CanInteract", true) end)
+    end
+
+    -- 9. Safeguard: Ensure Tools in character are enabled for Left/Right Click
+    for _, child in ipairs(char:GetChildren()) do
+        if child:IsA("Tool") and not child.Enabled then
+            child.Enabled = true
+        end
+    end
 end
 
 -- 1. Hook and block ONLY stun remotes (NEVER block player actions like drop, pallet, or interact)
@@ -1136,135 +1362,49 @@ end
 
 hookStunRemotes()
 
--- Speed & Fly Value Helpers (Seamlessly supports both Slider and Custom Text Input)
-local function getSpeedValue()
-    if Options.CustomSpeedInput and Options.CustomSpeedInput.Value then
-        local num = tonumber(Options.CustomSpeedInput.Value)
-        if num and num >= 16 then
-            return num
-        end
-    end
-    if Options.SpeedValue and Options.SpeedValue.Value then
-        return Options.SpeedValue.Value
-    end
-    return 28
-end
-
-local function getFlySpeedValue()
-    if Options.CustomFlySpeedInput and Options.CustomFlySpeedInput.Value then
-        local num = tonumber(Options.CustomFlySpeedInput.Value)
-        if num and num >= 10 then
-            return num
-        end
-    end
-    if Options.FlySpeed and Options.FlySpeed.Value then
-        return Options.FlySpeed.Value
-    end
-    return 50
-end
-
-local function getFOVValue()
-    if Options.CustomFOVInput and Options.CustomFOVInput.Value then
-        local num = tonumber(Options.CustomFOVInput.Value)
-        if num and num >= 30 and num <= 130 then
-            return num
-        end
-    end
-    if Options.FOVValue and Options.FOVValue.Value then
-        return Options.FOVValue.Value
-    end
-    return 70
-end
-
 -- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if not (Toggles.AntiStun and Toggles.AntiStun.Value) then return end
 
     local char = LocalPlayer.Character
     if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart")
     local hum = char:FindFirstChildOfClass("Humanoid")
+    local root = char:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 then return end
 
-    -- Check if character is genuinely afflicted by a stun or ragdoll
-    local hasStunAttr = (char:GetAttribute("Stunned") == true)
-        or (char:GetAttribute("IsStunned") == true)
-        or (char:GetAttribute("Headache") == true)
-        or (char:GetAttribute("Blinded") == true)
-        or (char:GetAttribute("Slowed") == true)
-        or (char:GetAttribute("Frozen") == true)
+    local isStunned = false
+    if hum.PlatformStand and not (Toggles.Fly and Toggles.Fly.Value) then isStunned = true end
+    local st = hum:GetState()
+    if st == Enum.HumanoidStateType.Ragdoll or st == Enum.HumanoidStateType.Physics or st == Enum.HumanoidStateType.FallingDown or st == Enum.HumanoidStateType.PlatformStanding then
+        isStunned = true
+    end
+    if root and root.Anchored then isStunned = true end
+    if char:GetAttribute("CanMove") == false then isStunned = true end
+    if hum.WalkSpeed < 16 and not (Toggles.Fly and Toggles.Fly.Value) then isStunned = true end
 
-    local isRagdolled = (hum.PlatformStand == true and not (Toggles.Fly and Toggles.Fly.Value))
-        or (hum:GetState() == Enum.HumanoidStateType.Ragdoll)
-        or (hum:GetState() == Enum.HumanoidStateType.Physics)
-        or (hum:GetState() == Enum.HumanoidStateType.FallingDown)
-        or (hum.Sit == true and not (char:FindFirstChildOfClass("VehicleSeat")))
-
-    -- Break stun immediately only if genuinely stunned
-    if hasStunAttr or isRagdolled then
-        hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
-        hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
-
-        if hum.PlatformStand and not (Toggles.Fly and Toggles.Fly.Value) then
-            hum.PlatformStand = false
+    if not isStunned then
+        for _, attr in ipairs(StunAttrNames) do
+            if char:GetAttribute(attr) == true or LocalPlayer:GetAttribute(attr) == true then
+                isStunned = true
+                break
+            end
         end
-        if hum.Sit then
-            hum.Sit = false
-        end
+    end
 
-        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-        hum:ChangeState(Enum.HumanoidStateType.Running)
-
-        -- Unanchor if anchored by stun
-        if root and root.Anchored then
-            root.Anchored = false
-        end
-
-        -- Restore WalkSpeed if zeroed by stun
-        local targetSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and getSpeedValue()) or defaultSpeed
-        if hum.WalkSpeed < 16 then
-            hum.WalkSpeed = targetSpeed
-        end
-
-        -- Stop ONLY genuine stun / blind animations (NEVER touch pallet, drop, repair, attack)
+    if not isStunned then
         local animator = hum:FindFirstChildOfClass("Animator")
         if animator then
             for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                local animName = track.Name:lower()
-                if not isProtectedActionAnim(animName) then
-                    if animName:find("stun") or animName:find("blind") or animName:find("headache") then
-                        pcall(function() track:Stop(0) end)
-                    end
+                if isStunAnimation(track) then
+                    isStunned = true
+                    break
                 end
-            end
-        end
-
-        -- Clear stun attributes
-        for _, attr in ipairs({"Stunned", "Stun", "Slowed", "Frozen", "Blinded", "IsStunned", "Headache"}) do
-            if char:GetAttribute(attr) then
-                char:SetAttribute(attr, false)
             end
         end
     end
 
-    -- Safeguard: Always ensure movement is enabled
-    if char:GetAttribute("CanMove") == false then
-        char:SetAttribute("CanMove", true)
-    end
-
-    -- Safeguard: Ensure Tools in character are always enabled for Left/Right Click
-    for _, child in ipairs(char:GetChildren()) do
-        if child:IsA("Tool") and not child.Enabled then
-            child.Enabled = true
-        end
-        if child:IsA("ValueBase") then
-            local cName = child.Name:lower()
-            if cName:find("stun") or cName:find("blind") or cName:find("freeze") then
-                if child:IsA("BoolValue") and child.Value == true then
-                    child.Value = false
-                end
-            end
-        end
+    if isStunned then
+        cleanStunEffects(char)
     end
 end)
 
@@ -1332,6 +1472,137 @@ local function matchKnownItem(rawName)
     for _, wep in ipairs(KnownKillerWeapons) do
         if lower:find(wep.key) then
             return wep.name
+        end
+    end
+    return nil
+end
+
+local KnownPerks = {
+    -- Survivor Perks (Official Violence District Wiki)
+    { key = "snakestep", name = "Snake Step" },
+    { key = "snake step", name = "Snake Step" },
+    { key = "secondwind", name = "Second Wind" },
+    { key = "second wind", name = "Second Wind" },
+    { key = "grabmyhand", name = "Grab My Hand" },
+    { key = "grab my hand", name = "Grab My Hand" },
+    { key = "builtdifferent", name = "Built Different" },
+    { key = "built different", name = "Built Different" },
+    { key = "flowstate", name = "Flowstate" },
+    { key = "quickrecovery", name = "Quick Recovery" },
+    { key = "quick recovery", name = "Quick Recovery" },
+    { key = "nobodyleftbehind", name = "Nobody Left Behind" },
+    { key = "nobody left behind", name = "Nobody Left Behind" },
+    { key = "leftbehind", name = "Left Behind" },
+    { key = "left behind", name = "Left Behind" },
+    { key = "onmyown", name = "On My Own" },
+    { key = "on my own", name = "On My Own" },
+    { key = "callmeback", name = "Call Me Back" },
+    { key = "call me back", name = "Call Me Back" },
+    { key = "enchancedtouch", name = "Enhanced Touch" },
+    { key = "enhanced touch", name = "Enhanced Touch" },
+    { key = "enhancedtouch", name = "Enhanced Touch" },
+    { key = "intenseworkout", name = "Intense Workout" },
+    { key = "intense workout", name = "Intense Workout" },
+    { key = "absoluteconfidence", name = "Absolute Confidence" },
+    { key = "absolute confidence", name = "Absolute Confidence" },
+    { key = "ambitiousmedic", name = "Ambitious Medic" },
+    { key = "ambitious medic", name = "Ambitious Medic" },
+    { key = "nopainnogain", name = "No Pain No Gain" },
+    { key = "no pain no gain", name = "No Pain No Gain" },
+    { key = "laststand", name = "Last Stand" },
+    { key = "last stand", name = "Last Stand" },
+    { key = "desperate", name = "Desperate Measures" },
+    { key = "pacifist", name = "Pacifist" },
+    { key = "partnersincrime", name = "Partners In Crime" },
+    { key = "partners in crime", name = "Partners In Crime" },
+    { key = "perfectionistplanning", name = "Perfectionist Planning" },
+    { key = "perfectionist planning", name = "Perfectionist Planning" },
+    { key = "visuallearner", name = "Visual Learner" },
+    { key = "visual learner", name = "Visual Learner" },
+    { key = "hearingaid", name = "Hearing Aid" },
+    { key = "hearing aid", name = "Hearing Aid" },
+    { key = "highkarma", name = "High Karma" },
+    { key = "high karma", name = "High Karma" },
+    { key = "groupproject", name = "Group Project" },
+    { key = "group project", name = "Group Project" },
+    { key = "headsup", name = "Heads Up" },
+    { key = "heads up", name = "Heads Up" },
+    { key = "all seeing eye", name = "All Seeing Eye" },
+    { key = "allseeingeye", name = "All Seeing Eye" },
+    { key = "familiarsoul", name = "Familiar Soul" },
+    { key = "familiar soul", name = "Familiar Soul" },
+    { key = "strongertogether", name = "Stronger Together" },
+    { key = "stronger together", name = "Stronger Together" },
+    { key = "timetoglowup", name = "Time To Glow Up" },
+    { key = "trade off", name = "Trade Off" },
+    { key = "tradeoff", name = "Trade Off" },
+    { key = "containment", name = "Containment" },
+    { key = "flawlessexecution", name = "Flawless Execution" },
+    { key = "flawless execution", name = "Flawless Execution" },
+    { key = "greatcollapse", name = "Great Collapse" },
+    { key = "great collapse", name = "Great Collapse" },
+    { key = "irontranquility", name = "Iron Tranquility" },
+    { key = "iron tranquility", name = "Iron Tranquility" },
+    { key = "kingsscourge", name = "King's Scourge" },
+    { key = "king's scourge", name = "King's Scourge" },
+    { key = "murderousacrobatics", name = "Murderous Acrobatics" },
+    { key = "murderous acrobatics", name = "Murderous Acrobatics" },
+    { key = "onscreenfear", name = "On Screen Fear" },
+    { key = "onscreen fear", name = "On Screen Fear" },
+    { key = "stagefright", name = "Stage Fright" },
+    { key = "stage fright", name = "Stage Fright" },
+    { key = "touchofdeath", name = "Touch of Death" },
+    { key = "touch of death", name = "Touch of Death" },
+    { key = "exposuretherapy", name = "Exposure Therapy" },
+    { key = "exposure therapy", name = "Exposure Therapy" },
+    { key = "eyesofheaven", name = "Eyes of Heaven" },
+    { key = "eyes of heaven", name = "Eyes of Heaven" },
+    { key = "eyesofhell", name = "Eyes of Hell" },
+    { key = "eyes of hell", name = "Eyes of Hell" },
+    { key = "deepwound", name = "Deep Wound" },
+    { key = "deep wound", name = "Deep Wound" },
+    { key = "debutshowcase", name = "Debut Showcase" },
+    { key = "debut showcase", name = "Debut Showcase" },
+
+    -- Common / Classic Survivor Perks
+    { key = "adrenaline", name = "Adrenaline" },
+    { key = "sprintburst", name = "Sprint Burst" },
+    { key = "sprint burst", name = "Sprint Burst" },
+    { key = "deadhard", name = "Dead Hard" },
+    { key = "dead hard", name = "Dead Hard" },
+    { key = "decisivestrike", name = "Decisive Strike" },
+    { key = "decisive strike", name = "Decisive Strike" },
+    { key = "unbreakable", name = "Unbreakable" },
+    { key = "borrowedtime", name = "Borrowed Time" },
+    { key = "borrowed time", name = "Borrowed Time" },
+    { key = "ironwill", name = "Iron Will" },
+    { key = "iron will", name = "Iron Will" },
+    { key = "selfcare", name = "Self Care" },
+    { key = "self care", name = "Self Care" },
+    { key = "resilience", name = "Resilience" },
+    { key = "spinechill", name = "Spine Chill" },
+    { key = "spine chill", name = "Spine Chill" },
+    { key = "lightfooted", name = "Lightfooted" },
+    { key = "light footed", name = "Lightfooted" },
+    { key = "quickandquiet", name = "Quick & Quiet" },
+    { key = "quick & quiet", name = "Quick & Quiet" },
+}
+
+local function matchKnownPerk(raw)
+    if not raw or typeof(raw) ~= "string" or raw == "" or raw == "None" then
+        return nil
+    end
+    local lower = raw:lower():gsub("[^%w%s]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if lower == "perks" or lower == "perk" or lower == "items" or lower == "item" or lower == "emotes"
+        or lower == "none" or lower == "empty" or lower == "locked" or lower:match("^perk%s*%d+$") 
+        or lower:match("^slot%s*%d+$") or lower:match("^item%s*%d+$") or lower == "select perk" 
+        or lower == "choose perk" or lower == "search" or lower == "killer" or lower == "survivor" then
+        return nil
+    end
+    for _, perk in ipairs(KnownPerks) do
+        local kClean = perk.key:lower():gsub("[^%w%s]", "")
+        if lower == kClean or lower:find(kClean, 1, true) then
+            return perk.name
         end
     end
     return nil
@@ -1548,35 +1819,40 @@ local function getPlayerPerksAndItems(player)
     -- Perks Discovery
     local foundPerks = {}
 
-    local function extractPerkName(val)
-        if typeof(val) == "string" and val ~= "" and val ~= "None" and #val < 40 and not val:find(":") and not val:find("table") then
-            local l = val:lower():gsub("^%s+", ""):gsub("%s+$", "")
-            if l == "perks" or l == "perk" or l == "items" or l == "item" or l == "emotes" 
-                or l == "title" or l == "none" or l == "slot" or l == "loadout"
-                or l:match("^perk%s*%d+$") or l:match("^slot%s*%d+$") or l:match("^item%s*%d+$")
-                or l == "empty" or l == "locked" or l == "select perk" or l == "choose perk" then
-                return nil
-            end
-            return val
+    local function addPerk(p)
+        if not p or p == "" or p == "None" or #foundPerks >= 3 then return end
+        local matched = matchKnownPerk(p) or p
+        if not matched or matched == "" then return end
+        local ml = matched:lower():gsub("[^%w%s]", ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if ml == "perks" or ml == "perk" or ml == "items" or ml == "item" or ml == "emotes" 
+            or ml == "none" or ml == "empty" or ml:match("^perk%s*%d+$") or ml:match("^slot%s*%d+$") 
+            or ml == "killer" or ml == "survivor" or ml == "title" or ml == "loadout" then
+            return
         end
-        return nil
+        if not table.find(foundPerks, matched) then
+            table.insert(foundPerks, matched)
+        end
     end
 
     local function scanPerkAttributes(obj)
         if not obj then return end
-        for _, slotKey in ipairs({"Slot1", "Slot2", "Slot3", "Perk1", "Perk2", "Perk3", "Perk_1", "Perk_2", "Perk_3", "PerkOne", "PerkTwo", "PerkThree", "ActivePerk1", "ActivePerk2", "ActivePerk3"}) do
-            local pName = extractPerkName(obj:GetAttribute(slotKey))
-            if pName and not table.find(foundPerks, pName) then
-                table.insert(foundPerks, pName)
+        for _, slotKey in ipairs({"Slot1", "Slot2", "Slot3", "Perk1", "Perk2", "Perk3", "Perk_1", "Perk_2", "Perk_3", "PerkOne", "PerkTwo", "PerkThree", "ActivePerk1", "ActivePerk2", "ActivePerk3", "EquippedPerks", "SurvivorPerks", "Perks"}) do
+            local val = obj:GetAttribute(slotKey)
+            if typeof(val) == "string" and val ~= "" then
+                for part in val:gmatch("[^,;%s]+") do
+                    addPerk(part)
+                end
             end
         end
         local allAttrs = obj:GetAttributes()
         for k, v in pairs(allAttrs) do
-            if typeof(k) == "string" and k:lower():find("perk") then
-                local pName = extractPerkName(v)
-                if pName and not table.find(foundPerks, pName) then
-                    table.insert(foundPerks, pName)
+            if typeof(k) == "string" and k:lower():find("perk") and typeof(v) == "string" then
+                for part in v:gmatch("[^,;%s]+") do
+                    addPerk(part)
                 end
+            elseif typeof(v) == "string" then
+                local m = matchKnownPerk(v)
+                if m then addPerk(m) end
             end
         end
     end
@@ -1588,27 +1864,26 @@ local function getPlayerPerksAndItems(player)
         if not parent then return end
         for _, child in ipairs(parent:GetChildren()) do
             local cName = child.Name:lower()
-            if cName:find("perk") or (cName:find("slot") and not cName:find("item")) then
-                if child:IsA("StringValue") then
-                    local pName = extractPerkName(child.Value)
-                    if pName and not table.find(foundPerks, pName) then
-                        table.insert(foundPerks, pName)
-                    end
-                elseif child:IsA("Folder") or child:IsA("Configuration") then
-                    for _, sub in ipairs(child:GetChildren()) do
-                        if sub:IsA("StringValue") then
-                            local pName = extractPerkName(sub.Value)
-                            if pName and not table.find(foundPerks, pName) then
-                                table.insert(foundPerks, pName)
-                            end
-                        elseif sub:IsA("ValueBase") then
-                            local pName = extractPerkName(tostring(sub.Value))
-                            if pName and not table.find(foundPerks, pName) then
-                                table.insert(foundPerks, pName)
-                            end
-                        end
+            if cName:find("perk") or (cName:find("slot") and not cName:find("item")) or cName:find("loadout") then
+                -- Check child itself
+                addPerk(child.Name)
+                if child:IsA("StringValue") and child.Value ~= "" then
+                    addPerk(child.Value)
+                elseif child:IsA("ValueBase") and tostring(child.Value) ~= "" then
+                    addPerk(tostring(child.Value))
+                end
+                -- Check sub-children inside perk folder
+                for _, sub in ipairs(child:GetChildren()) do
+                    addPerk(sub.Name)
+                    if sub:IsA("StringValue") and sub.Value ~= "" then
+                        addPerk(sub.Value)
+                    elseif sub:IsA("ValueBase") and tostring(sub.Value) ~= "" then
+                        addPerk(tostring(sub.Value))
                     end
                 end
+            else
+                local m = matchKnownPerk(child.Name)
+                if m then addPerk(m) end
             end
         end
     end
@@ -1618,7 +1893,7 @@ local function getPlayerPerksAndItems(player)
 
     -- Scan ReplicatedStorage for perks
     pcall(function()
-        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Perks"}) do
+        for _, fName in ipairs({"PlayerData", "Players", "Profiles", "Data", "SurvivorData", "KillerData", "Perks", "Loadouts", "SurvivorLoadouts", "GameData", "RoundData"}) do
             local f = ReplicatedStorage:FindFirstChild(fName)
             if f then
                 local pFolder = f:FindFirstChild(player.Name) or f:FindFirstChild(tostring(player.UserId))
@@ -1630,19 +1905,54 @@ local function getPlayerPerksAndItems(player)
         end
     end)
 
-    -- Scan PlayerGui for perks
+    -- Scan LocalPlayer PlayerGui (Loadout screen, Spectator, Roster, HUD)
     pcall(function()
-        local pg = player:FindFirstChildOfClass("PlayerGui")
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then
-            local spec = pg:FindFirstChild("Spectator") or pg:FindFirstChild("Inventory") or pg:FindFirstChild("Menu") or pg:FindFirstChild("Lobby")
-            if spec then
-                for _, desc in ipairs(spec:GetDescendants()) do
-                    if desc:IsA("TextLabel") and desc.Visible then
-                        local txt = desc.Text
-                        if txt and #txt < 35 and desc.Name:lower():find("perk") then
-                            local pName = extractPerkName(txt)
-                            if pName and not table.find(foundPerks, pName) then
-                                table.insert(foundPerks, pName)
+            -- 1. Scan frames around the "Perks" label (shown in loadout menu)
+            for _, desc in ipairs(pg:GetDescendants()) do
+                if desc:IsA("TextLabel") and desc.Text:lower():gsub("%s+", "") == "perks" then
+                    local pFrame = desc.Parent
+                    if pFrame then
+                        -- Check all siblings in the same container frame
+                        for _, sibling in ipairs(pFrame:GetChildren()) do
+                            if sibling ~= desc then
+                                addPerk(sibling.Name)
+                                for _, sub in ipairs(sibling:GetDescendants()) do
+                                    if sub:IsA("ImageLabel") or sub:IsA("ImageButton") or sub:IsA("Frame") or sub:IsA("TextLabel") then
+                                        addPerk(sub.Name)
+                                        if sub:IsA("TextLabel") and sub.Text ~= "" then
+                                            addPerk(sub.Text)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- 2. Scan Spectator / In-Game HUD for this specific player
+            local pFrame = pg:FindFirstChild(player.Name, true) or pg:FindFirstChild(player.DisplayName, true)
+            if pFrame then
+                for _, desc in ipairs(pFrame:GetDescendants()) do
+                    if desc:IsA("ImageLabel") or desc:IsA("ImageButton") or desc:IsA("TextLabel") then
+                        local m = matchKnownPerk(desc.Name) or (desc:IsA("TextLabel") and matchKnownPerk(desc.Text))
+                        if m then addPerk(m) end
+                    end
+                end
+            end
+
+            -- 3. If inspecting LocalPlayer, deep scan all equipped perk buttons/icons
+            if player == LocalPlayer then
+                for _, desc in ipairs(pg:GetDescendants()) do
+                    if desc:IsA("ImageLabel") or desc:IsA("ImageButton") then
+                        local dName = desc.Name
+                        local m = matchKnownPerk(dName)
+                        if m then
+                            local pName = desc.Parent and desc.Parent.Name:lower() or ""
+                            if pName:find("slot") or pName:find("perk") or pName:find("loadout") or pName:find("equip") or pName:find("survivor") or pName:find("hud") or pName:find("card") then
+                                addPerk(m)
                             end
                         end
                     end
@@ -2942,8 +3252,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.0 Loaded Successfully!",
+        Description = "VD 2.1 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.0 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.1 Loaded Successfully! Enjoy!")
 end)

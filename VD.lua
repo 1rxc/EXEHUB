@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.5 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.6 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -49,6 +49,15 @@ local playerHighlights = {}
 local generatorHighlights = {}
 local trackedGenerators = {}
 local defaultSpeed = 16
+pcall(function()
+    if LocalPlayer.Character then
+        local h = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if h and h.WalkSpeed > 0 then
+            defaultSpeed = h.WalkSpeed
+        end
+    end
+end)
+local applyPlayerSpeed = nil
 
 -- Fly tracking
 local flyBodyVelocity = nil
@@ -57,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.5",
+    Footer = "VD 2.6",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -806,6 +815,15 @@ local function setupPlayer(player)
         end
         if player == LocalPlayer then
             bindLocalCharacterAntiStun(char)
+            pcall(function()
+                local h = char:FindFirstChildOfClass("Humanoid")
+                if h and h.WalkSpeed > 0 and not (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value) then
+                    defaultSpeed = h.WalkSpeed
+                end
+            end)
+            if applyPlayerSpeed then
+                applyPlayerSpeed()
+            end
         end
     end)
 
@@ -832,6 +850,15 @@ local function setupPlayer(player)
         end
         if player == LocalPlayer then
             bindLocalCharacterAntiStun(player.Character)
+            pcall(function()
+                local h = player.Character:FindFirstChildOfClass("Humanoid")
+                if h and h.WalkSpeed > 0 and not (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value) then
+                    defaultSpeed = h.WalkSpeed
+                end
+            end)
+            if applyPlayerSpeed then
+                applyPlayerSpeed()
+            end
         end
     end
 end
@@ -1116,7 +1143,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.5 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.6 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -1213,6 +1240,28 @@ local function getFOVValue()
         return Options.FOVValue.Value
     end
     return 70
+end
+
+applyPlayerSpeed = function()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    if Toggles.Fly and Toggles.Fly.Value then return end
+
+    local isEnabled = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value == true)
+    if isEnabled then
+        local targetSpeed = getSpeedValue()
+        hum.WalkSpeed = targetSpeed
+        if char:GetAttribute("Speed") ~= nil then
+            pcall(function() char:SetAttribute("Speed", targetSpeed) end)
+        end
+    else
+        hum.WalkSpeed = defaultSpeed
+        if char:GetAttribute("Speed") ~= nil then
+            pcall(function() char:SetAttribute("Speed", defaultSpeed) end)
+        end
+    end
 end
 
 local function cleanStunEffects(char)
@@ -2337,17 +2386,24 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
     local root = char:FindFirstChild("HumanoidRootPart")
 
     -- Speed Adjust
-    if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and not (Toggles.Fly and Toggles.Fly.Value) then
-        local targetSpeed = getSpeedValue()
-        if hum then
-            hum.WalkSpeed = targetSpeed
-            if hum.MoveDirection.Magnitude > 0 and root and targetSpeed > 16 then
-                local extraSpeed = (targetSpeed - 16)
-                root.CFrame = root.CFrame + (hum.MoveDirection * (extraSpeed * dt))
+    if not (Toggles.Fly and Toggles.Fly.Value) then
+        local isSpeedOn = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value == true)
+        if isSpeedOn then
+            local targetSpeed = getSpeedValue()
+            if hum and hum.WalkSpeed ~= targetSpeed then
+                hum.WalkSpeed = targetSpeed
             end
-        end
-        if char:GetAttribute("Speed") then
-            pcall(function() char:SetAttribute("Speed", targetSpeed) end)
+            if char:GetAttribute("Speed") ~= nil and char:GetAttribute("Speed") ~= targetSpeed then
+                pcall(function() char:SetAttribute("Speed", targetSpeed) end)
+            end
+        else
+            -- When Speed Adjust is OFF: strictly ensure player speed stays at default
+            if hum and hum.WalkSpeed > defaultSpeed then
+                hum.WalkSpeed = defaultSpeed
+            end
+            if char:GetAttribute("Speed") ~= nil and char:GetAttribute("Speed") ~= defaultSpeed then
+                pcall(function() char:SetAttribute("Speed", defaultSpeed) end)
+            end
         end
     end
 
@@ -2649,11 +2705,10 @@ end)
 local SpeedToggle = MovementGroupBox:AddToggle("SpeedAdjust", {
     Text = "Speed Adjust",
     Default = false,
+    Tooltip = "Turn ON to activate speed. When OFF, speed is strictly default (16).",
     Callback = function(val)
-        local char = LocalPlayer.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum and not val then
-            hum.WalkSpeed = defaultSpeed
+        if applyPlayerSpeed then
+            applyPlayerSpeed()
         end
     end,
 })
@@ -2671,7 +2726,7 @@ MovementGroupBox:AddInput("CustomSpeedInput", {
     Numeric = true,
     Finished = false,
     Text = "Custom Speed (Input Text)",
-    Tooltip = "Type exact speed amount (e.g. 28, 45, 80, 150)",
+    Tooltip = "Type exact speed amount (e.g. 28, 45, 80, 120). Only activates when Speed Adjust is ON.",
     Placeholder = "Enter speed (e.g. 28)",
     Callback = function(val)
         local num = tonumber(val)
@@ -2679,12 +2734,8 @@ MovementGroupBox:AddInput("CustomSpeedInput", {
             if Options.SpeedValue and num <= 120 and Options.SpeedValue.Value ~= num then
                 pcall(function() Options.SpeedValue:SetValue(num) end)
             end
-            if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
-                local char = LocalPlayer.Character
-                local hum = char and char:FindFirstChildOfClass("Humanoid")
-                if hum then
-                    hum.WalkSpeed = num
-                end
+            if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and applyPlayerSpeed then
+                applyPlayerSpeed()
             end
         end
     end,
@@ -2697,16 +2748,13 @@ MovementGroupBox:AddSlider("SpeedValue", {
     Max = 120,
     Rounding = 0,
     Compact = false,
+    Tooltip = "Adjust speed amount. Only activates when Speed Adjust is ON.",
     Callback = function(val)
         if Options.CustomSpeedInput and Options.CustomSpeedInput.Value ~= tostring(val) then
             pcall(function() Options.CustomSpeedInput:SetValue(tostring(val)) end)
         end
-        if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
-            local char = LocalPlayer.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                hum.WalkSpeed = val
-            end
+        if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and applyPlayerSpeed then
+            applyPlayerSpeed()
         end
     end,
 })
@@ -3538,8 +3586,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.5 Loaded Successfully!",
+        Description = "VD 2.6 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.5 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.6 Loaded Successfully! Enjoy!")
 end)

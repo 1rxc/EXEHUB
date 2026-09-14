@@ -1376,7 +1376,7 @@ local function getPlayerEquippedItem(player, isTargetKiller)
             if desc:IsA("Model") or desc:IsA("Tool") or desc:IsA("MeshPart") or desc:IsA("Accessory") or desc:IsA("BasePart") then
                 local dName = desc.Name:lower()
                 if not (dName:find("arm") or dName:find("leg") or dName:find("torso") or dName:find("head") or dName:find("root") or dName:find("hair") or dName:find("shirt") or dName:find("pants") or dName:find("face") or dName:find("attachment")) then
-                    local matched = matchKnownItem(desc.Name)
+                    local matched = matchKnownItem(desc.Name) or (desc.Parent and matchKnownItem(desc.Parent.Name))
                     if matched then
                         return matched .. " (Equipped)"
                     end
@@ -1482,30 +1482,38 @@ local function getPlayerEquippedItem(player, isTargetKiller)
     pcall(function()
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then
-            local spec = pg:FindFirstChild("Spectator") or pg:FindFirstChild("Inventory") or pg:FindFirstChild("Menu") or pg:FindFirstChild("Lobby") or pg:FindFirstChild("Scoreboard")
-            if spec then
-                local pFrame = spec:FindFirstChild(player.Name, true) or spec:FindFirstChild(player.DisplayName, true)
-                if pFrame then
-                    for _, desc in ipairs(pFrame:GetDescendants()) do
-                        if desc:IsA("TextLabel") and desc.Visible then
-                            local matched = matchKnownItem(desc.Text)
-                            if matched then
-                                guiItem = matched
-                                return
-                            end
-                        end
-                    end
-                end
-                if player == LocalPlayer then
-                    local browse = spec:FindFirstChild("Browse_loadout_survivor", true) or spec:FindFirstChild("Items", true)
-                    if browse then
-                        for _, desc in ipairs(browse:GetDescendants()) do
-                            if (desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
-                                local matched = matchKnownItem(desc.Name) or (desc:IsA("TextLabel") and matchKnownItem(desc.Text))
+            for _, gui in ipairs(pg:GetChildren()) do
+                if gui:IsA("ScreenGui") or gui:IsA("BillboardGui") then
+                    local pFrame = gui:FindFirstChild(player.Name, true) or gui:FindFirstChild(player.DisplayName, true)
+                    if pFrame then
+                        for _, desc in ipairs(pFrame:GetDescendants()) do
+                            if desc:IsA("TextLabel") and desc.Visible then
+                                local matched = matchKnownItem(desc.Text)
                                 if matched then
                                     guiItem = matched
                                     return
                                 end
+                            elseif desc:IsA("ImageLabel") or desc:IsA("ImageButton") then
+                                local matched = matchKnownItem(desc.Name)
+                                if matched then
+                                    guiItem = matched
+                                    return
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+            if player == LocalPlayer then
+                local spec = pg:FindFirstChild("Spectator") or pg:FindFirstChild("Inventory") or pg:FindFirstChild("Menu") or pg:FindFirstChild("Lobby")
+                local browse = spec and (spec:FindFirstChild("Browse_loadout_survivor", true) or spec:FindFirstChild("Items", true))
+                if browse then
+                    for _, desc in ipairs(browse:GetDescendants()) do
+                        if (desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("ImageButton")) and desc.Visible then
+                            local matched = matchKnownItem(desc.Name) or (desc:IsA("TextLabel") and matchKnownItem(desc.Text))
+                            if matched then
+                                guiItem = matched
+                                return
                             end
                         end
                     end
@@ -1524,9 +1532,11 @@ end
 
 local function getPlayerPerksAndItems(player)
     local isTargetKiller = isKiller(player)
+    local displayName = (player and player.DisplayName ~= "" and player.DisplayName) or (player and player.Name) or "Unknown"
+    local userName = player and ("@" .. player.Name) or "@unknown"
     local info = {
-        name = player and player.DisplayName or "Unknown",
-        username = player and ("@" .. player.Name) or "@unknown",
+        name = displayName,
+        username = userName,
         role = isTargetKiller and "Killer" or "Survivor",
         equippedItem = getPlayerEquippedItem(player, isTargetKiller),
         perks = { "None", "None", "None" }
@@ -1540,6 +1550,13 @@ local function getPlayerPerksAndItems(player)
 
     local function extractPerkName(val)
         if typeof(val) == "string" and val ~= "" and val ~= "None" and #val < 40 and not val:find(":") and not val:find("table") then
+            local l = val:lower():gsub("^%s+", ""):gsub("%s+$", "")
+            if l == "perks" or l == "perk" or l == "items" or l == "item" or l == "emotes" 
+                or l == "title" or l == "none" or l == "slot" or l == "loadout"
+                or l:match("^perk%s*%d+$") or l:match("^slot%s*%d+$") or l:match("^item%s*%d+$")
+                or l == "empty" or l == "locked" or l == "select perk" or l == "choose perk" then
+                return nil
+            end
             return val
         end
         return nil
@@ -2453,23 +2470,64 @@ end)
 ----------------------------------------------------------------------
 
 -- Left Side: Live Player & Perk Inspector
+local currentTargetPlayer = LocalPlayer
+
+local function resolveSelectedPlayer(val)
+    if not val then return nil end
+    if typeof(val) == "Instance" then
+        if val:IsA("Player") and val.Parent == Players then
+            return val
+        end
+        return nil
+    end
+    if typeof(val) == "table" then
+        if val.Name and typeof(val.Name) == "string" then
+            return resolveSelectedPlayer(val.Name)
+        end
+        for _, v in pairs(val) do
+            local resolved = resolveSelectedPlayer(v)
+            if resolved then return resolved end
+        end
+        return nil
+    end
+    if typeof(val) == "string" and val ~= "" then
+        local p = Players:FindFirstChild(val)
+        if p and p:IsA("Player") then return p end
+        local clean = val:gsub("^%s+", ""):gsub("%s+$", "")
+        p = Players:FindFirstChild(clean)
+        if p and p:IsA("Player") then return p end
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl.Name == clean or pl.DisplayName == clean then
+                return pl
+            end
+            if pl.Name:lower() == clean:lower() or pl.DisplayName:lower() == clean:lower() then
+                return pl
+            end
+            if clean:find(pl.Name, 1, true) or (pl.DisplayName ~= "" and clean:find(pl.DisplayName, 1, true)) then
+                return pl
+            end
+        end
+    end
+    return nil
+end
+
 LiveUIGroupBox:AddDropdown("LiveInspectTarget", {
     SpecialType = "Player",
     ExcludeLocalPlayer = false,
     Text = "Select Player to Inspect",
     Tooltip = "Choose any player to inspect their live role, item, and equipped perks",
-    Callback = function()
+    Callback = function(val)
         if updateLiveInspector then
-            updateLiveInspector()
+            updateLiveInspector(val)
         end
     end,
 })
 
 LiveUIGroupBox:AddDivider()
 
-local inspectNameLabel = LiveUIGroupBox:AddLabel("< Name >: Select player")
-local inspectUsernameLabel = LiveUIGroupBox:AddLabel("< @username >: None")
-local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role: ...")
+local inspectNameLabel = LiveUIGroupBox:AddLabel("Name : Select player")
+local inspectUsernameLabel = LiveUIGroupBox:AddLabel("Username : @none")
+local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role : ...")
 
 pcall(function()
     if inspectNameLabel and inspectNameLabel.TextLabel then inspectNameLabel.TextLabel.RichText = false end
@@ -2480,7 +2538,7 @@ end)
 LiveUIGroupBox:AddDivider()
 
 local inspectItemHeader = LiveUIGroupBox:AddLabel("--- Equipped Item ---")
-local inspectItemLabel = LiveUIGroupBox:AddLabel("Item: Scanning...")
+local inspectItemLabel = LiveUIGroupBox:AddLabel("Item : Scanning...")
 
 pcall(function()
     if inspectItemHeader and inspectItemHeader.TextLabel then inspectItemHeader.TextLabel.RichText = false end
@@ -2490,9 +2548,9 @@ end)
 LiveUIGroupBox:AddDivider()
 
 local inspectPerkHeader = LiveUIGroupBox:AddLabel("--- Equipped Perks ---")
-local inspectPerk1Label = LiveUIGroupBox:AddLabel("Perk 1: Loading...")
-local inspectPerk2Label = LiveUIGroupBox:AddLabel("Perk 2: Loading...")
-local inspectPerk3Label = LiveUIGroupBox:AddLabel("Perk 3: Loading...")
+local inspectPerk1Label = LiveUIGroupBox:AddLabel("Perk 1 : None")
+local inspectPerk2Label = LiveUIGroupBox:AddLabel("Perk 2 : None")
+local inspectPerk3Label = LiveUIGroupBox:AddLabel("Perk 3 : None")
 
 pcall(function()
     if inspectPerkHeader and inspectPerkHeader.TextLabel then inspectPerkHeader.TextLabel.RichText = false end
@@ -2503,37 +2561,49 @@ end)
 
 LiveUIGroupBox:AddDivider()
 
-local function updateLiveInspector()
-    local targetName = Options.LiveInspectTarget and Options.LiveInspectTarget.Value
-    local targetPlayer = (targetName and Players:FindFirstChild(targetName)) or LocalPlayer
-    if not targetPlayer then
-        targetPlayer = Players:GetPlayers()[1] or LocalPlayer
+local function updateLiveInspector(overrideTarget)
+    local target = overrideTarget
+    if not target and Options.LiveInspectTarget then
+        target = Options.LiveInspectTarget.Value
     end
 
+    local resolved = resolveSelectedPlayer(target)
+    if resolved then
+        currentTargetPlayer = resolved
+    elseif not currentTargetPlayer or currentTargetPlayer.Parent ~= Players then
+        currentTargetPlayer = LocalPlayer
+    end
+
+    local targetPlayer = currentTargetPlayer or LocalPlayer
     local info = getPlayerPerksAndItems(targetPlayer)
+
     if inspectNameLabel and inspectNameLabel.SetText then
-        pcall(function() inspectNameLabel.TextLabel.RichText = false end)
-        inspectNameLabel:SetText("< " .. tostring(info.name) .. " >")
+        pcall(function() if inspectNameLabel.TextLabel then inspectNameLabel.TextLabel.RichText = false end end)
+        inspectNameLabel:SetText("Name : " .. tostring(info.name))
     end
     if inspectUsernameLabel and inspectUsernameLabel.SetText then
-        pcall(function() inspectUsernameLabel.TextLabel.RichText = false end)
-        inspectUsernameLabel:SetText("< " .. tostring(info.username) .. " >")
+        pcall(function() if inspectUsernameLabel.TextLabel then inspectUsernameLabel.TextLabel.RichText = false end end)
+        inspectUsernameLabel:SetText("Username : " .. tostring(info.username))
     end
     if inspectRoleLabel and inspectRoleLabel.SetText then
-        inspectRoleLabel:SetText("Role: " .. tostring(info.role))
+        pcall(function() if inspectRoleLabel.TextLabel then inspectRoleLabel.TextLabel.RichText = false end end)
+        inspectRoleLabel:SetText("Role : " .. tostring(info.role))
     end
     if inspectItemLabel and inspectItemLabel.SetText then
-        pcall(function() inspectItemLabel.TextLabel.RichText = false end)
-        inspectItemLabel:SetText("Item: " .. tostring(info.equippedItem))
+        pcall(function() if inspectItemLabel.TextLabel then inspectItemLabel.TextLabel.RichText = false end end)
+        inspectItemLabel:SetText("Item : " .. tostring(info.equippedItem))
     end
     if inspectPerk1Label and inspectPerk1Label.SetText then
-        inspectPerk1Label:SetText("Perk 1: " .. tostring(info.perks[1]))
+        pcall(function() if inspectPerk1Label.TextLabel then inspectPerk1Label.TextLabel.RichText = false end end)
+        inspectPerk1Label:SetText("Perk 1 : " .. tostring(info.perks[1]))
     end
     if inspectPerk2Label and inspectPerk2Label.SetText then
-        inspectPerk2Label:SetText("Perk 2: " .. tostring(info.perks[2]))
+        pcall(function() if inspectPerk2Label.TextLabel then inspectPerk2Label.TextLabel.RichText = false end end)
+        inspectPerk2Label:SetText("Perk 2 : " .. tostring(info.perks[2]))
     end
     if inspectPerk3Label and inspectPerk3Label.SetText then
-        inspectPerk3Label:SetText("Perk 3: " .. tostring(info.perks[3]))
+        pcall(function() if inspectPerk3Label.TextLabel then inspectPerk3Label.TextLabel.RichText = false end end)
+        inspectPerk3Label:SetText("Perk 3 : " .. tostring(info.perks[3]))
     end
 end
 

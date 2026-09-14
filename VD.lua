@@ -940,6 +940,33 @@ end
 
 hookStunRemotes()
 
+-- Speed & Fly Value Helpers (Seamlessly supports both Slider and Custom Text Input)
+local function getSpeedValue()
+    if Options.CustomSpeedInput and Options.CustomSpeedInput.Value then
+        local num = tonumber(Options.CustomSpeedInput.Value)
+        if num and num >= 16 then
+            return num
+        end
+    end
+    if Options.SpeedValue and Options.SpeedValue.Value then
+        return Options.SpeedValue.Value
+    end
+    return 28
+end
+
+local function getFlySpeedValue()
+    if Options.CustomFlySpeedInput and Options.CustomFlySpeedInput.Value then
+        local num = tonumber(Options.CustomFlySpeedInput.Value)
+        if num and num >= 10 then
+            return num
+        end
+    end
+    if Options.FlySpeed and Options.FlySpeed.Value then
+        return Options.FlySpeed.Value
+    end
+    return 50
+end
+
 -- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if not (Toggles.AntiStun and Toggles.AntiStun.Value) then return end
@@ -985,7 +1012,7 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
         end
 
         -- Restore WalkSpeed if zeroed by stun
-        local targetSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and Options.SpeedValue and Options.SpeedValue.Value) or defaultSpeed
+        local targetSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and getSpeedValue()) or defaultSpeed
         if hum.WalkSpeed < 16 then
             hum.WalkSpeed = targetSpeed
         end
@@ -1059,7 +1086,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
 
     -- Speed Adjust
     if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and not (Toggles.Fly and Toggles.Fly.Value) then
-        local targetSpeed = Options.SpeedValue and Options.SpeedValue.Value or 28
+        local targetSpeed = getSpeedValue()
         if hum then
             hum.WalkSpeed = targetSpeed
             if hum.MoveDirection.Magnitude > 0 and root and targetSpeed > 16 then
@@ -1112,7 +1139,15 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
             moveDir = moveDir - Vector3.new(0, 1, 0)
         end
 
-        local flySpeed = Options.FlySpeed and Options.FlySpeed.Value or 50
+        -- Support mobile thumbstick / touch movement for fly
+        if moveDir.Magnitude == 0 and hum.MoveDirection.Magnitude > 0 then
+            moveDir = cam.CFrame:VectorToWorldSpace(Vector3.new(hum.MoveDirection.X, 0, hum.MoveDirection.Z))
+            if moveDir.Magnitude == 0 then
+                moveDir = hum.MoveDirection
+            end
+        end
+
+        local flySpeed = getFlySpeedValue()
         if moveDir.Magnitude > 0 then
             flyBodyVelocity.Velocity = moveDir.Unit * flySpeed
         else
@@ -1283,7 +1318,7 @@ PlayerGroupBox:AddButton("Fix Controls / Unstick", function()
             hum.Sit = false
             hum:ChangeState(Enum.HumanoidStateType.GettingUp)
             hum:ChangeState(Enum.HumanoidStateType.Running)
-            hum.WalkSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and Options.SpeedValue and Options.SpeedValue.Value) or defaultSpeed
+            hum.WalkSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and getSpeedValue()) or defaultSpeed
         end
         for _, attr in ipairs({"Stunned", "IsStunned", "Slowed", "Frozen", "Blinded", "Headache", "Interacting", "Busy", "Action", "InAction"}) do
             if char:GetAttribute(attr) ~= nil then
@@ -1320,14 +1355,41 @@ SpeedToggle:AddKeyPicker("SpeedKeybind", {
     Text = "Speed Adjust",
 })
 
+MovementGroupBox:AddInput("CustomSpeedInput", {
+    Default = "28",
+    Numeric = true,
+    Finished = false,
+    Text = "Custom Speed (Input Text)",
+    Tooltip = "Type exact speed amount (e.g. 28, 45, 80, 150)",
+    Placeholder = "Enter speed (e.g. 28)",
+    Callback = function(val)
+        local num = tonumber(val)
+        if num and num >= 16 then
+            if Options.SpeedValue and num <= 120 and Options.SpeedValue.Value ~= num then
+                pcall(function() Options.SpeedValue:SetValue(num) end)
+            end
+            if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
+                local char = LocalPlayer.Character
+                local hum = char and char:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    hum.WalkSpeed = num
+                end
+            end
+        end
+    end,
+})
+
 MovementGroupBox:AddSlider("SpeedValue", {
-    Text = "Speed Value",
+    Text = "Speed Value (Slider)",
     Default = 28,
     Min = 16,
     Max = 120,
     Rounding = 0,
     Compact = false,
     Callback = function(val)
+        if Options.CustomSpeedInput and Options.CustomSpeedInput.Value ~= tostring(val) then
+            pcall(function() Options.CustomSpeedInput:SetValue(tostring(val)) end)
+        end
         if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
             local char = LocalPlayer.Character
             local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -1382,13 +1444,35 @@ FlyToggle:AddKeyPicker("FlyKeybind", {
     Text = "Fly",
 })
 
+MovementGroupBox:AddInput("CustomFlySpeedInput", {
+    Default = "50",
+    Numeric = true,
+    Finished = false,
+    Text = "Custom Fly Speed (Input Text)",
+    Tooltip = "Type exact fly speed (e.g. 50, 100, 200)",
+    Placeholder = "Enter fly speed (e.g. 50)",
+    Callback = function(val)
+        local num = tonumber(val)
+        if num and num >= 10 then
+            if Options.FlySpeed and num <= 150 and Options.FlySpeed.Value ~= num then
+                pcall(function() Options.FlySpeed:SetValue(num) end)
+            end
+        end
+    end,
+})
+
 MovementGroupBox:AddSlider("FlySpeed", {
-    Text = "Fly Speed",
+    Text = "Fly Speed (Slider)",
     Default = 50,
     Min = 10,
     Max = 150,
     Rounding = 0,
     Compact = false,
+    Callback = function(val)
+        if Options.CustomFlySpeedInput and Options.CustomFlySpeedInput.Value ~= tostring(val) then
+            pcall(function() Options.CustomFlySpeedInput:SetValue(tostring(val)) end)
+        end
+    end,
 })
 
 ----------------------------------------------------------------------
@@ -1576,7 +1660,7 @@ ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 
 SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ "EXEHUBKeybind", "KillScriptKeybind", "SpeedKeybind", "NoclipKeybind", "FlyKeybind", "KeybindMenuOpen", "FloatingButtonOpen" })
+SaveManager:SetIgnoreIndexes({ "KeybindMenuOpen", "FloatingButtonOpen" })
 
 ThemeManager:SetFolder("ViolenceDistrict")
 SaveManager:SetFolder("ViolenceDistrict/configs")
@@ -1593,6 +1677,24 @@ pcall(function()
     else
         SaveManager:LoadAutoloadConfig()
     end
+
+    -- Sync text inputs and sliders after loading config
+    task.delay(0.2, function()
+        pcall(function()
+            if Options.CustomSpeedInput and Options.SpeedValue then
+                local speedNum = tonumber(Options.CustomSpeedInput.Value)
+                if speedNum and speedNum <= 120 and Options.SpeedValue.Value ~= speedNum then
+                    Options.SpeedValue:SetValue(speedNum)
+                end
+            end
+            if Options.CustomFlySpeedInput and Options.FlySpeed then
+                local flyNum = tonumber(Options.CustomFlySpeedInput.Value)
+                if flyNum and flyNum <= 150 and Options.FlySpeed.Value ~= flyNum then
+                    Options.FlySpeed:SetValue(flyNum)
+                end
+            end
+        end)
+    end)
 end)
 
 -- Auto-Save Configuration whenever player changes any toggle, slider, or color

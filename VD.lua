@@ -758,83 +758,190 @@ local function scanGenerators()
 end
 
 ----------------------------------------------------------------------
--- EXACT AUTO PERFECT SKILL CHECK
+-- EXACT AUTO PERFECT SKILL CHECK (100% AUTONOMOUS / NO CLIENT KEYBOARD)
 ----------------------------------------------------------------------
 
-local lastTapTime = 0
-local hasTappedCurrent = false
+local lastSkillTapTime = 0
+local hasTappedSkillThisCheck = false
+local lastNeedleAngle = nil
 
-local function isNeedleInZone(needleAngle, targetAngle)
-    local needle = needleAngle % 360
+-- Construct a safe proxy InputObject for internal script invocation
+local fakeSpaceInput = setmetatable({
+    KeyCode = Enum.KeyCode.Space,
+    UserInputType = Enum.UserInputType.Keyboard,
+    UserInputState = Enum.UserInputState.Begin,
+    Position = Vector3.zero,
+    Delta = Vector3.zero,
+}, {
+    __index = function(t, k)
+        if k == "IsA" then
+            return function(self, className)
+                return className == "InputObject" or className == "Instance"
+            end
+        end
+        return nil
+    end
+})
+
+-- Precise angle sweep detector: catches the sweet spot even during lag or frame drops
+local function isInTargetArc(lastAngle, currentAngle, targetAngle)
     local target = targetAngle % 360
     local sweetSpotStart = (target + 104) % 360
-    local sweetSpotEnd = (target + 114) % 360
-    if sweetSpotStart > sweetSpotEnd then
-        return needle >= sweetSpotStart or needle <= sweetSpotEnd
+    local sweetSpotEnd = (target + 115) % 360
+    local winLen = (sweetSpotEnd - sweetSpotStart) % 360
+
+    -- Direct check: current rotation inside sweet spot
+    local curOffset = (currentAngle - sweetSpotStart) % 360
+    if curOffset <= winLen then
+        return true
     end
-    return needle >= sweetSpotStart and needle <= sweetSpotEnd
+
+    -- Sweep check: needle rotated through sweet spot between last frame and current frame
+    if lastAngle ~= nil then
+        local sweep = (currentAngle - lastAngle) % 360
+        if sweep > 0 and sweep < 180 then
+            local distToStart = (sweetSpotStart - lastAngle) % 360
+            if distToStart <= sweep then
+                return true
+            end
+        end
+    end
+
+    return false
 end
 
-local function simulateSpace(checkFrame, promptGui)
-    -- 1. Space Key simulation (PC & executors)
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
-        task.defer(function()
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-        end)
-    end)
+local function triggerSkillCheckHit(checkFrame, promptGui)
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
 
-    if keypress and keyrelease then
-        pcall(function()
-            keypress(0x20)
-            task.defer(function()
-                keyrelease(0x20)
-            end)
-        end)
-    end
-
-    -- 2. Mobile action check button tap
-    pcall(function()
-        local pg = LocalPlayer:FindFirstChild("PlayerGui")
-        if pg then
-            local mob = pg:FindFirstChild("Survivor-mob")
-            if mob then
-                local action = mob:FindFirstChild("Controls") and mob.Controls:FindFirstChild("action")
-                local chk = action and (action:FindFirstChild("check") or action:FindFirstChildWhichIsA("GuiButton"))
-                if chk and chk:IsA("GuiObject") then
-                    if firesignal then
-                        firesignal(chk.Activated)
-                        firesignal(chk.MouseButton1Click)
+    -- 1. DIRECT GUI DISPATCH (Self-working on both PC and Mobile without client keyboard)
+    if pg then
+        local mob = pg:FindFirstChild("Survivor-mob")
+        if mob then
+            local action = mob:FindFirstChild("Controls") and mob.Controls:FindFirstChild("action")
+            local chk = action and (action:FindFirstChild("check") or action:FindFirstChildWhichIsA("GuiButton"))
+            if chk and chk:IsA("GuiObject") then
+                -- Firesignal directly on all button signals
+                if firesignal then
+                    pcall(function() firesignal(chk.Activated) end)
+                    pcall(function() firesignal(chk.MouseButton1Click) end)
+                    pcall(function() firesignal(chk.MouseButton1Down) end)
+                    pcall(function() firesignal(chk.TouchTap) end)
+                end
+                -- Invoke connected game functions directly via getconnections
+                if getconnections then
+                    for _, sigName in ipairs({"Activated", "MouseButton1Click", "MouseButton1Down", "TouchTap"}) do
+                        local sig = chk[sigName]
+                        if sig then
+                            pcall(function()
+                                for _, conn in ipairs(getconnections(sig)) do
+                                    if conn.Function and conn.Enabled ~= false then
+                                        pcall(conn.Function)
+                                    elseif conn.Fire then
+                                        pcall(function() conn:Fire() end)
+                                    end
+                                end
+                            end)
+                        end
                     end
+                end
+                -- Virtual touch at button center coordinates
+                pcall(function()
                     local p = chk.AbsolutePosition
                     local s = chk.AbsoluteSize
                     local cx = p.X + s.X / 2
                     local cy = p.Y + s.Y / 2
-                    VirtualInputManager:SendTouchEvent(1, 0, cx, cy)
-                    VirtualInputManager:SendTouchEvent(1, 2, cx, cy)
-                    VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
-                    VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+                    VirtualInputManager:SendTouchEvent(999, 0, cx, cy)
+                    VirtualInputManager:SendTouchEvent(999, 2, cx, cy)
+                end)
+            end
+        end
+    end
+
+    -- 2. Dispatch all buttons and interactive elements in SkillCheckPromptGui
+    if promptGui then
+        for _, desc in ipairs(promptGui:GetDescendants()) do
+            if desc:IsA("GuiButton") or (desc:IsA("GuiObject") and desc.Name:lower():find("check")) then
+                if firesignal then
+                    pcall(function() firesignal(desc.Activated) end)
+                    pcall(function() firesignal(desc.MouseButton1Click) end)
+                end
+                if getconnections then
+                    for _, sigName in ipairs({"Activated", "MouseButton1Click"}) do
+                        local sig = desc[sigName]
+                        if sig then
+                            pcall(function()
+                                for _, conn in ipairs(getconnections(sig)) do
+                                    if conn.Function and conn.Enabled ~= false then
+                                        pcall(conn.Function)
+                                    elseif conn.Fire then
+                                        pcall(function() conn:Fire() end)
+                                    end
+                                end
+                            end)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- 3. INTERNAL SCRIPT INVOCATION (Directly executes game's InputBegan listener with fake Space)
+    if getconnections then
+        pcall(function()
+            for _, conn in ipairs(getconnections(UserInputService.InputBegan)) do
+                if conn.Function and conn.Enabled ~= false then
+                    pcall(conn.Function, fakeSpaceInput, false)
+                elseif conn.Fire then
+                    pcall(function() conn:Fire(fakeSpaceInput, false) end)
+                end
+            end
+        end)
+    end
+    if firesignal then
+        pcall(function()
+            firesignal(UserInputService.InputBegan, fakeSpaceInput, false)
+        end)
+    end
+
+    -- 4. ContextActionService bound actions invocation
+    pcall(function()
+        local cas = game:GetService("ContextActionService")
+        if cas and cas.GetAllBoundActionInfo then
+            local bound = cas:GetAllBoundActionInfo()
+            for actionName, _ in pairs(bound) do
+                local an = actionName:lower()
+                if an:find("check") or an:find("skill") or an:find("space") or an:find("action") or an:find("qte") or an:find("interact") then
+                    pcall(function()
+                        cas:CallFunctionToFindBoundAction(actionName, Enum.UserInputState.Begin, fakeSpaceInput)
+                    end)
                 end
             end
         end
     end)
 
-    -- 3. Click / firesignal inside promptGui
-    if promptGui then
-        for _, desc in ipairs(promptGui:GetDescendants()) do
-            if desc:IsA("GuiButton") and firesignal then
+    -- 5. Safe background VIM fallback (ONLY if NOT in Settings or typing, so it NEVER interferes with settings)
+    pcall(function()
+        local isMenuOpen = false
+        pcall(function()
+            isMenuOpen = GuiService.MenuIsOpen
+        end)
+        local isTyping = UserInputService:GetFocusedTextBox() ~= nil
+
+        if not isMenuOpen and not isTyping then
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+            task.delay(0.02, function()
                 pcall(function()
-                    firesignal(desc.Activated)
-                    firesignal(desc.MouseButton1Click)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
                 end)
-            end
+            end)
         end
-    end
+    end)
 end
 
-connections[#connections + 1] = RunService.Heartbeat:Connect(function()
+connections[#connections + 1] = RunService.RenderStepped:Connect(function()
     if not (Toggles.AutoFixGen and Toggles.AutoFixGen.Value) then
-        hasTappedCurrent = false
+        hasTappedSkillThisCheck = false
+        lastNeedleAngle = nil
         return
     end
 
@@ -843,28 +950,37 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
 
     local prompt = pg:FindFirstChild("SkillCheckPromptGui")
     if not prompt or not prompt.Enabled then
-        hasTappedCurrent = false
+        hasTappedSkillThisCheck = false
+        lastNeedleAngle = nil
         return
     end
 
     local check = prompt:FindFirstChild("Check")
     if not check or not check.Visible then
-        hasTappedCurrent = false
+        hasTappedSkillThisCheck = false
+        lastNeedleAngle = nil
         return
     end
 
-    local line = check:FindFirstChild("Line")
-    local goal = check:FindFirstChild("Goal")
+    local line = check:FindFirstChild("Line") or check:FindFirstChild("Needle") or check:FindFirstChild("Pointer")
+    local goal = check:FindFirstChild("Goal") or check:FindFirstChild("Target") or check:FindFirstChild("Zone")
     if not line or not goal then return end
 
-    if hasTappedCurrent or (tick() - lastTapTime < 0.4) then
+    local currentAngle = line.Rotation % 360
+    local goalAngle = goal.Rotation % 360
+
+    if hasTappedSkillThisCheck or (tick() - lastSkillTapTime < 0.35) then
+        lastNeedleAngle = currentAngle
         return
     end
 
-    if isNeedleInZone(line.Rotation, goal.Rotation) then
-        hasTappedCurrent = true
-        lastTapTime = tick()
-        simulateSpace(check, prompt)
+    if isInTargetArc(lastNeedleAngle, currentAngle, goalAngle) then
+        hasTappedSkillThisCheck = true
+        lastSkillTapTime = tick()
+        lastNeedleAngle = nil
+        triggerSkillCheckHit(check, prompt)
+    else
+        lastNeedleAngle = currentAngle
     end
 end)
 
@@ -1120,23 +1236,32 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
         local cam = Workspace.CurrentCamera
         local moveDir = Vector3.zero
 
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-            moveDir = moveDir + cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-            moveDir = moveDir - cam.CFrame.LookVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-            moveDir = moveDir - cam.CFrame.RightVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-            moveDir = moveDir + cam.CFrame.RightVector
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-            moveDir = moveDir + Vector3.new(0, 1, 0)
-        end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
-            moveDir = moveDir - Vector3.new(0, 1, 0)
+        local isTypingOrMenu = (UserInputService:GetFocusedTextBox() ~= nil)
+        pcall(function()
+            if GuiService.MenuIsOpen then
+                isTypingOrMenu = true
+            end
+        end)
+
+        if not isTypingOrMenu then
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+                moveDir = moveDir + cam.CFrame.LookVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+                moveDir = moveDir - cam.CFrame.LookVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+                moveDir = moveDir - cam.CFrame.RightVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+                moveDir = moveDir + cam.CFrame.RightVector
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                moveDir = moveDir + Vector3.new(0, 1, 0)
+            end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+                moveDir = moveDir - Vector3.new(0, 1, 0)
+            end
         end
 
         -- Support mobile thumbstick / touch movement for fly

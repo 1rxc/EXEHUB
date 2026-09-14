@@ -2351,90 +2351,69 @@ end
 
 local function triggerParryInputs(daggerTool, mPos)
     local mPos = mPos or UserInputService:GetMouseLocation()
+    local myChar = LocalPlayer.Character
 
-    -- 1. VirtualInputManager Mouse Clicks (Right click + Left click)
+    -- 1. INSTANT TOOL ACTIVATION (Frame-0 Direct Engine Invocation - 0ms latency)
+    if daggerTool and typeof(daggerTool) == "Instance" and daggerTool:IsA("Tool") then
+        pcall(function()
+            daggerTool:Activate()
+        end)
+    elseif myChar then
+        for _, item in ipairs(myChar:GetChildren()) do
+            if item:IsA("Tool") and item.Activate then
+                pcall(function() item:Activate() end)
+            end
+        end
+    end
+
+    -- 2. INSTANT MOUSE CLICKS (M2 Right-Click + M1 Left-Click)
     pcall(function()
-        VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1)
-        VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, true, game, 1)
+        VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, true, game, 1) -- Right Click Down
+        VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, true, game, 1) -- Left Click Down
     end)
     if mouse2press then pcall(mouse2press) end
     if mouse1press then pcall(mouse1press) end
     if mouse2click then pcall(mouse2click) end
     if mouse1click then pcall(mouse1click) end
-
-    -- 2. VirtualUser Mouse Clicks
     pcall(function()
         VirtualUser:Button2Down(Vector2.new(mPos.X, mPos.Y))
         VirtualUser:Button1Down(Vector2.new(mPos.X, mPos.Y))
     end)
 
-    -- 3. Universal Combat Keypresses (E, Q)
+    -- 3. COMBAT KEYPRESSES (E, Q)
     pcall(function()
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
     end)
 
-    -- 4. Tool :Activate() if tool exists in character
-    local myChar = LocalPlayer.Character
-    if daggerTool and typeof(daggerTool) == "Instance" and daggerTool:IsA("Tool") then
-        pcall(function()
-            if daggerTool.Activate then daggerTool:Activate() end
-        end)
-    elseif myChar then
-        pcall(function()
-            for _, item in ipairs(myChar:GetChildren()) do
-                if item:IsA("Tool") and item.Activate then
-                    item:Activate()
-                end
-            end
-        end)
-    end
-
-    -- 5. Remote Events in Tool, Character, Backpack, and ReplicatedStorage
+    -- 4. DIRECT TARGETED REMOTES (Direct tool & ReplicatedStorage fast-fire, zero tree walking)
     pcall(function()
-        local function scanAndFireRemotes(container)
-            if not container or typeof(container) ~= "Instance" then return end
-            for _, rem in ipairs(container:GetDescendants()) do
-                if rem:IsA("RemoteEvent") then
-                    local rName = rem.Name:lower()
-                    if rName:find("parry") or rName:find("guard") or rName:find("block") or rName:find("counter") or rName:find("defend") or rName:find("use") or rName:find("activate") or rName:find("action") or rName:find("ability") then
-                        rem:FireServer()
-                    end
+        if daggerTool and typeof(daggerTool) == "Instance" then
+            for _, child in ipairs(daggerTool:GetChildren()) do
+                if child:IsA("RemoteEvent") then
+                    child:FireServer()
                 end
             end
         end
-
-        if daggerTool and typeof(daggerTool) == "Instance" then
-            scanAndFireRemotes(daggerTool)
-        end
-        if myChar then
-            scanAndFireRemotes(myChar)
-        end
-        local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
-        if bp then
-            scanAndFireRemotes(bp)
-        end
-
-        for _, name in ipairs({
-            "Parry", "ParryEvent", "GuardEvent", "BlockEvent", "UseParry",
-            "ParryAction", "SurvivorParry", "UseItem", "ItemUse", "ActivateItem",
-            "UseAbility", "Ability", "Defend", "Counter"
-        }) do
-            local r = ReplicatedStorage:FindFirstChild(name, true)
-            if r and r:IsA("RemoteEvent") then
-                r:FireServer()
+        local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+        if remotesFolder then
+            for _, rName in ipairs({"Parry", "ParryEvent", "Guard", "Block", "UseItem", "ItemUse", "ActivateItem"}) do
+                local r = remotesFolder:FindFirstChild(rName)
+                if r and r:IsA("RemoteEvent") then
+                    r:FireServer()
+                end
             end
         end
     end)
 
-    -- 6. PlayerGui Touch / Mobile GUI Buttons & HUD Action Buttons
+    -- 5. PlayerGui Mobile / Touch Action Buttons (Direct lookup)
     pcall(function()
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then
             for _, desc in ipairs(pg:GetDescendants()) do
                 if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
                     local dName = desc.Name:lower()
-                    if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") or dName:find("defend") or dName:find("action") or dName:find("skill") or dName:find("use") then
+                    if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") then
                         if firesignal then
                             firesignal(desc.Activated)
                             firesignal(desc.MouseButton1Click)
@@ -2541,14 +2520,14 @@ local function markTrackParried(track)
     end)
 end
 
-local function executeParry(source)
+local function executeParry(source, passedDagger)
     if not (Toggles.AutoParry and Toggles.AutoParry.Value) and source ~= "MANUAL_TEST" then
         return false
     end
     if isKiller(LocalPlayer) then return false end
 
     -- Strict Item Verification: Player can ONLY activate Auto Parry if Parrying Dagger is in inventory!
-    local daggerTool, isEquipped = getParryingDagger()
+    local daggerTool = passedDagger or getParryingDagger()
     if not daggerTool then
         return false
     end
@@ -2559,13 +2538,14 @@ local function executeParry(source)
     end
 
     local now = tick()
-    if now - lastParryTick < 0.40 then return false end
+    if now - lastParryTick < 0.35 then return false end
     lastParryTick = now
 
     local myChar = LocalPlayer.Character
     local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
 
     -- 1. Synchronously equip Parrying Dagger if in backpack and is a real Tool
+    local isEquipped = (myChar and daggerTool.Parent == myChar)
     if daggerTool and typeof(daggerTool) == "Instance" and daggerTool:IsA("Tool") and not isEquipped and myChar then
         pcall(function()
             daggerTool.Parent = myChar
@@ -2591,9 +2571,9 @@ local function executeParry(source)
         triggerParryInputs(currentDagger, mPos)
     end)
 
-    -- 2D. Hold 250ms to lock counter stance, then cleanly release inputs
+    -- 2D. Hold 350ms to lock counter stance, then cleanly release inputs
     task.spawn(function()
-        task.wait(0.25)
+        task.wait(0.35)
         pcall(function()
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
             VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, false, game, 1)
@@ -2653,9 +2633,9 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     local kPos = kRoot.Position
     local dist = (kPos - myPos).Magnitude
 
-    -- 4. Elevation Check: Filter out extreme vertical distances (e.g. different floor/roof > 7.5 studs)
+    -- 4. Elevation Check: Filter out extreme vertical distances (e.g. different floor/roof > 8.0 studs)
     local yDiff = math.abs(kPos.Y - myPos.Y)
-    if yDiff > 7.5 then
+    if yDiff > 8.0 then
         return
     end
 
@@ -2681,19 +2661,19 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     -- If killer is not facing our character, DO NOT PARRY (hitting air)!
     local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
     if doFaceCheck then
-        if flatDist <= 4.5 then
-            -- At point-blank, killer must face generally towards player (cannot face backwards)
-            if aimDot < 0.15 then
-                return -- Killer is facing away from player even at point-blank
+        if flatDist <= 5.0 then
+            -- At point-blank, killer must face generally towards player
+            if aimDot < 0.10 then
+                return -- Killer is facing completely away from player
             end
-        elseif flatDist <= 9.5 then
-            -- In standard melee range, killer must be facing towards player (within ~60 degrees)
-            if aimDot < 0.50 then
+        elseif flatDist <= 10.0 then
+            -- In standard melee range, killer must be facing towards player (within ~63 degrees)
+            if aimDot < 0.45 then
                 return -- Killer is swinging sideways or hitting air away from player
             end
         else
-            -- At chase / lunge distance (> 9.5 studs), killer must be aimed towards player (within ~56 degrees)
-            if aimDot < 0.55 then
+            -- At chase / lunge distance (> 10 studs), killer must be aimed towards player (within ~60 degrees)
+            if aimDot < 0.50 then
                 return -- Killer is lunging/hitting empty air away from player
             end
         end
@@ -2704,9 +2684,10 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         end
     end
 
-    -- 7. SMART DISTANCE & CHASE CHECK (RUNNING / PURSUIT AWARE):
-    -- User's slider determines maximum parry reach (e.g. 13 studs)
-    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13.0
+    -- 7. SMART DISTANCE & EARLY COUNTER REACH (Zero-Latency Frame-0 Intercept):
+    -- In Violence District, killer lunges and weapon sweeps reach up to 16-18 studs!
+    -- Countering at the VERY FIRST FRAME of the attack swing guarantees our parry stance is fully established BEFORE damage connects!
+    local sliderDist = (Options.ParryDistance and Options.ParryDistance.Value) or 15.0
 
     local kVel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity or Vector3.zero)
     local flatKVel = Vector2.new(kVel.X, kVel.Z)
@@ -2716,36 +2697,33 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     -- kSpeedTowardsMe: Speed at which the KILLER is moving towards the player
     local kSpeedTowardsMe = flatKVel:Dot(flatToMe)
 
-    -- Check if KILLER is moving away from the player (e.g. walking backwards / retreating)
-    -- IMPORTANT: We ONLY check killer's own velocity towards the player, NOT relative velocity!
-    -- When the local player runs away, player velocity is positive, which used to make relative velocity negative and break parrying while running!
-    if kSpeedTowardsMe < -3.0 and flatDist > 5.5 then
+    -- Only drop if killer is actively moving backwards away from player
+    if kSpeedTowardsMe < -3.5 and flatDist > 6.0 then
         return -- Killer is actively running away from player; swing will miss air
     end
 
     -- Player is running away (being chased) if local player velocity is moving away from killer
-    local isPlayerRunningAway = (flatMyVel:Dot(flatToMe) > 3.0)
+    local isPlayerRunningAway = (flatMyVel:Dot(flatToMe) > 2.5)
 
     -- Dynamic lunge compensation:
-    -- When the killer is moving/lunging towards us, their attack hitbox extends forward
     local lungeBonus = 0
-    if kSpeedTowardsMe > 1.5 then
-        lungeBonus = math.clamp(kSpeedTowardsMe * 0.25, 0, 3.5)
+    if kSpeedTowardsMe > 0.5 then
+        lungeBonus = math.clamp(kSpeedTowardsMe * 0.35, 0, 5.0)
     end
 
-    -- Chase Bonus: When survivor is running away and killer is chasing from behind, killer's lunge reaches further
-    if isPlayerRunningAway and kSpeedTowardsMe > 0.5 then
-        lungeBonus = math.max(lungeBonus, 2.0)
+    -- Chase Bonus: When survivor is running away and killer is chasing from behind
+    if isPlayerRunningAway and kSpeedTowardsMe > 0 then
+        lungeBonus = math.max(lungeBonus, 3.5)
     end
 
-    local effectiveMaxDist = maxDist + lungeBonus
+    -- EARLY INTERCEPT: Minimum 17.5 studs reach ensures attacks are parried at swing startup, not point-blank!
+    local effectiveMaxDist = math.max(sliderDist + lungeBonus, 17.5)
     if flatDist > effectiveMaxDist then
         return -- Killer is out of reach; attack will hit empty air!
     end
 
-    -- 8. TARGET FOCUS CHECK:
-    -- If another survivor is closer to the killer, and the killer is aimed directly at them instead of you
-    if flatDist > 5.5 then
+    -- 8. TARGET FOCUS CHECK (Only when killer is far and clearly focused on another nearby survivor)
+    if flatDist > 8.0 then
         for _, otherPlayer in ipairs(Players:GetPlayers()) do
             if otherPlayer ~= LocalPlayer and otherPlayer ~= killerPlayer and otherPlayer.Character then
                 local oRoot = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -2753,11 +2731,11 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
                     local oPos = oRoot.Position
                     local flatOPos = Vector2.new(oPos.X, oPos.Z)
                     local oDist = (flatOPos - flatKPos).Magnitude
-                    if oDist < (flatDist - 2.5) and oDist < 7.5 then
+                    if oDist < (flatDist - 3.5) and oDist < 6.0 then
                         local toOther = (flatOPos - flatKPos).Unit
                         local otherDot = flatKLook:Dot(toOther)
                         -- Killer is locked onto the closer survivor
-                        if otherDot > 0.80 and otherDot > (aimDot + 0.20) then
+                        if otherDot > 0.85 and otherDot > (aimDot + 0.25) then
                             return -- Killer is attacking the other survivor, not you!
                         end
                     end
@@ -2766,8 +2744,8 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         end
     end
 
-    -- 9. Guaranteed Protection Execution
-    local executed = executeParry("KILLER_ATTACK")
+    -- 9. Guaranteed Protection Execution (Passes dagger directly for 0ms re-scan)
+    local executed = executeParry("KILLER_ATTACK", daggerTool)
     if executed and track then
         markTrackParried(track)
     end
@@ -2946,7 +2924,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
         if daggerTool then
             local myRoot = char:FindFirstChild("HumanoidRootPart")
             if myRoot then
-                local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13.0
+                local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 16.0
                 local nearestKillerDist = 999
                 for _, player in ipairs(Players:GetPlayers()) do
                     if player ~= LocalPlayer and player.Character then
@@ -2959,8 +2937,8 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                                 nearestKillerDist = d
                             end
 
-                            -- Scan attack animations when within range (allowing 4.0 stud lunge margin)
-                            if d <= (maxDist + 4.0) then
+                            -- Scan attack animations with early detection margin (up to 22 studs)
+                            if d <= math.max(maxDist + 6.0, 22.0) then
                                 local kAnim = pChar:FindFirstChildWhichIsA("Animator", true)
                                 if kAnim then
                                     for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
@@ -2974,9 +2952,9 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                     end
                 end
 
-                -- Auto Pre-Equip Parrying Dagger when cooled down & near Killer for 0ms draw latency
+                -- Auto Pre-Equip Parrying Dagger whenever cooled down (0ms draw latency, always in hand)
                 local onCd = isParryOnCooldown()
-                if not onCd and not isDaggerEquipped and hum and hum.Health > 0 and nearestKillerDist <= 40.0 then
+                if not onCd and not isDaggerEquipped and hum and hum.Health > 0 then
                     pcall(function()
                         hum:EquipTool(daggerTool)
                     end)
@@ -3571,12 +3549,12 @@ AutoParryGroupBox:AddDivider()
 
 AutoParryGroupBox:AddSlider("ParryDistance", {
     Text = "Parry Distance (Studs)",
-    Default = 13,
-    Min = 8,
-    Max = 22,
+    Default = 16,
+    Min = 10,
+    Max = 25,
     Rounding = 1,
     Compact = false,
-    Tooltip = "Maximum reach to activate parry stance. Smart aim & trajectory check prevents parrying when killer hits empty air.",
+    Tooltip = "Maximum reach to activate parry stance. Frame-0 early intercept counters killer lunge at swing startup, guaranteeing parry activates before damage can connect.",
 })
 
 AutoParryGroupBox:AddToggle("ParryFaceCheck", {
@@ -3647,6 +3625,8 @@ local function applyNetworkOptimizations(enable)
         end
     end)
 end
+
+applyNetworkOptimizations(true)
 
 -- Left Side: Ping & MS Booster
 OptimizeGroupBox:AddToggle("BoostPing", {

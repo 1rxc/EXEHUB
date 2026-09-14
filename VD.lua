@@ -7,6 +7,27 @@ local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
+-- Protective hook: Prevents Roblox GetTextBoundsAsync from failing on rich text formatting
+if Library and Library.GetTextBounds then
+    local oldGetTextBounds = Library.GetTextBounds
+    Library.GetTextBounds = function(self, text, font, size, width)
+        local success, bx, by = pcall(function()
+            return oldGetTextBounds(self, text, font, size, width)
+        end)
+        if success and bx and by then
+            return bx, by
+        end
+        local stripped = tostring(text or ""):gsub("<[^>]->", ""):gsub("[<>]", "")
+        local success2, bx2, by2 = pcall(function()
+            return oldGetTextBounds(self, stripped, font, size, width)
+        end)
+        if success2 and bx2 and by2 then
+            return bx2, by2
+        end
+        return 120, 20
+    end
+end
+
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
@@ -2218,27 +2239,30 @@ LiveUIGroupBox:AddDropdown("LiveInspectTarget", {
 
 LiveUIGroupBox:AddDivider()
 
-local function safeRichText(str)
-    if str == nil then return "" end
-    local s = tostring(str)
-    s = s:gsub("&", "&amp;")
-    s = s:gsub("<", "&lt;")
-    s = s:gsub(">", "&gt;")
-    s = s:gsub('"', "&quot;")
-    return s
-end
-
-local inspectNameLabel = LiveUIGroupBox:AddLabel("&lt; Name &gt;: Select player", true)
-local inspectUsernameLabel = LiveUIGroupBox:AddLabel("&lt; @username &gt;: None", true)
+local inspectNameLabel = LiveUIGroupBox:AddLabel("< Name >: Select player")
+local inspectUsernameLabel = LiveUIGroupBox:AddLabel("< @username >: None")
 local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role: ...")
-local inspectItemLabel = LiveUIGroupBox:AddLabel("Equipped Item: ...", true)
+local inspectItemLabel = LiveUIGroupBox:AddLabel("Equipped Item: ...")
+
+pcall(function()
+    if inspectNameLabel and inspectNameLabel.TextLabel then inspectNameLabel.TextLabel.RichText = false end
+    if inspectUsernameLabel and inspectUsernameLabel.TextLabel then inspectUsernameLabel.TextLabel.RichText = false end
+    if inspectRoleLabel and inspectRoleLabel.TextLabel then inspectRoleLabel.TextLabel.RichText = false end
+    if inspectItemLabel and inspectItemLabel.TextLabel then inspectItemLabel.TextLabel.RichText = false end
+end)
 
 LiveUIGroupBox:AddDivider()
 
 local inspectPerkHeader = LiveUIGroupBox:AddLabel("--- Equipped Perks ---")
-local inspectPerk1Label = LiveUIGroupBox:AddLabel("Perk 1: Loading...", true)
-local inspectPerk2Label = LiveUIGroupBox:AddLabel("Perk 2: Loading...", true)
-local inspectPerk3Label = LiveUIGroupBox:AddLabel("Perk 3: Loading...", true)
+local inspectPerk1Label = LiveUIGroupBox:AddLabel("Perk 1: Loading...")
+local inspectPerk2Label = LiveUIGroupBox:AddLabel("Perk 2: Loading...")
+local inspectPerk3Label = LiveUIGroupBox:AddLabel("Perk 3: Loading...")
+
+pcall(function()
+    if inspectPerk1Label and inspectPerk1Label.TextLabel then inspectPerk1Label.TextLabel.RichText = false end
+    if inspectPerk2Label and inspectPerk2Label.TextLabel then inspectPerk2Label.TextLabel.RichText = false end
+    if inspectPerk3Label and inspectPerk3Label.TextLabel then inspectPerk3Label.TextLabel.RichText = false end
+end)
 
 LiveUIGroupBox:AddDivider()
 
@@ -2251,25 +2275,27 @@ local function updateLiveInspector()
 
     local info = getPlayerPerksAndItems(targetPlayer)
     if inspectNameLabel and inspectNameLabel.SetText then
-        inspectNameLabel:SetText("&lt; " .. safeRichText(info.name) .. " &gt;")
+        pcall(function() inspectNameLabel.TextLabel.RichText = false end)
+        inspectNameLabel:SetText("< " .. tostring(info.name) .. " >")
     end
     if inspectUsernameLabel and inspectUsernameLabel.SetText then
-        inspectUsernameLabel:SetText("&lt; " .. safeRichText(info.username) .. " &gt;")
+        pcall(function() inspectUsernameLabel.TextLabel.RichText = false end)
+        inspectUsernameLabel:SetText("< " .. tostring(info.username) .. " >")
     end
     if inspectRoleLabel and inspectRoleLabel.SetText then
-        inspectRoleLabel:SetText("Role: " .. safeRichText(info.role))
+        inspectRoleLabel:SetText("Role: " .. tostring(info.role))
     end
     if inspectItemLabel and inspectItemLabel.SetText then
-        inspectItemLabel:SetText("Equipped Item: " .. safeRichText(info.equippedItem))
+        inspectItemLabel:SetText("Equipped Item: " .. tostring(info.equippedItem))
     end
     if inspectPerk1Label and inspectPerk1Label.SetText then
-        inspectPerk1Label:SetText("Perk 1: " .. safeRichText(info.perks[1]))
+        inspectPerk1Label:SetText("Perk 1: " .. tostring(info.perks[1]))
     end
     if inspectPerk2Label and inspectPerk2Label.SetText then
-        inspectPerk2Label:SetText("Perk 2: " .. safeRichText(info.perks[2]))
+        inspectPerk2Label:SetText("Perk 2: " .. tostring(info.perks[2]))
     end
     if inspectPerk3Label and inspectPerk3Label.SetText then
-        inspectPerk3Label:SetText("Perk 3: " .. safeRichText(info.perks[3]))
+        inspectPerk3Label:SetText("Perk 3: " .. tostring(info.perks[3]))
     end
 end
 

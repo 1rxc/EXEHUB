@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.6 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.7 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -66,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.6",
+    Footer = "VD 2.7",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1143,7 +1143,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.6 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.7 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2132,26 +2132,36 @@ local function isAttackAnimation(track)
     return false
 end
 
+local function isDaggerTool(item)
+    if not item or not item:IsA("Tool") then return false end
+    local n = (item.Name or ""):lower()
+    local tip = (item.ToolTip or ""):lower()
+    if n:find("parry") or n:find("dagger") or tip:find("parry") or tip:find("dagger") then
+        return true
+    end
+    for _, attr in ipairs({"ItemType", "WeaponType", "Type", "ID", "ItemName", "ToolType"}) do
+        local aVal = tostring(item:GetAttribute(attr) or ""):lower()
+        if aVal:find("parry") or aVal:find("dagger") then
+            return true
+        end
+    end
+    return false
+end
+
 local function getParryingDagger()
     local char = LocalPlayer.Character
     if char then
         for _, item in ipairs(char:GetChildren()) do
-            if item:IsA("Tool") then
-                local n = item.Name:lower()
-                if n:find("parry") or n:find("dagger") then
-                    return item, true
-                end
+            if isDaggerTool(item) then
+                return item, true
             end
         end
     end
     local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
     if bp then
         for _, item in ipairs(bp:GetChildren()) do
-            if item:IsA("Tool") then
-                local n = item.Name:lower()
-                if n:find("parry") or n:find("dagger") then
-                    return item, false
-                end
+            if isDaggerTool(item) then
+                return item, false
             end
         end
     end
@@ -2164,13 +2174,18 @@ local function executeParry(source)
     end
     if isKiller(LocalPlayer) then return false end
 
+    -- Strict Item Verification: Player can ONLY activate Auto Parry if Parrying Dagger is in inventory!
+    local daggerTool, isEquipped = getParryingDagger()
+    if not daggerTool then
+        return false
+    end
+
     local now = tick()
     if now - lastParryTick < 0.82 then return false end
     lastParryTick = now
 
     local myChar = LocalPlayer.Character
     local hum = myChar and myChar:FindFirstChildOfClass("Humanoid")
-    local daggerTool, isEquipped = getParryingDagger()
 
     -- 1. Synchronously equip Parrying Dagger if in backpack (0ms delay)
     if daggerTool and not isEquipped and myChar then
@@ -2277,6 +2292,12 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     if not (Toggles.AutoParry and Toggles.AutoParry.Value) or not killerChar then return end
     if isKiller(LocalPlayer) then return end
     if killerPlayer == LocalPlayer then return end
+
+    -- Strict Item Check: Player CANNOT activate auto parry without Parrying Dagger!
+    local daggerTool = getParryingDagger()
+    if not daggerTool then
+        return
+    end
 
     local myChar = LocalPlayer.Character
     local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -2496,38 +2517,39 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
 
     -- Real-time Killer Attack Detection for Auto Parry (Layer 2 real-time scan) & Auto Pre-Equip
     if Toggles.AutoParry and Toggles.AutoParry.Value and not isKiller(LocalPlayer) then
-        local myRoot = char:FindFirstChild("HumanoidRootPart")
-        if myRoot then
-            local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 15.0
-            local nearestKillerDist = 999
-            for _, player in ipairs(Players:GetPlayers()) do
-                if player ~= LocalPlayer and isKiller(player) and player.Character then
-                    local kRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character.PrimaryPart
-                    if kRoot and kRoot:IsA("BasePart") then
-                        local d = (kRoot.Position - myRoot.Position).Magnitude
-                        if d < nearestKillerDist then
-                            nearestKillerDist = d
-                        end
+        -- Strict check: Auto Parry CANNOT activate if player does not possess Parrying Dagger
+        local daggerTool, isDaggerEquipped = getParryingDagger()
+        if daggerTool then
+            local myRoot = char:FindFirstChild("HumanoidRootPart")
+            if myRoot then
+                local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 15.0
+                local nearestKillerDist = 999
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= LocalPlayer and isKiller(player) and player.Character then
+                        local kRoot = player.Character:FindFirstChild("HumanoidRootPart") or player.Character.PrimaryPart
+                        if kRoot and kRoot:IsA("BasePart") then
+                            local d = (kRoot.Position - myRoot.Position).Magnitude
+                            if d < nearestKillerDist then
+                                nearestKillerDist = d
+                            end
 
-                        -- Scan attack animations when within range (allowing 8.0 stud lunge margin)
-                        if d <= (maxDist + 8.0) then
-                            local kAnim = player.Character:FindFirstChildWhichIsA("Animator", true)
-                            if kAnim then
-                                for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
-                                    if not parriedTracks[track] and isAttackAnimation(track) then
-                                        checkAndTriggerParry(player.Character, player, track)
+                            -- Scan attack animations when within range (allowing 8.0 stud lunge margin)
+                            if d <= (maxDist + 8.0) then
+                                local kAnim = player.Character:FindFirstChildWhichIsA("Animator", true)
+                                if kAnim then
+                                    for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
+                                        if not parriedTracks[track] and isAttackAnimation(track) then
+                                            checkAndTriggerParry(player.Character, player, track)
+                                        end
                                     end
                                 end
                             end
                         end
                     end
                 end
-            end
 
-            -- Auto Pre-Equip Parrying Dagger near Killer for 0ms draw latency
-            if nearestKillerDist <= 28.0 and hum and hum.Health > 0 then
-                local daggerTool, isEquipped = getParryingDagger()
-                if daggerTool and not isEquipped then
+                -- Auto Pre-Equip Parrying Dagger near Killer for 0ms draw latency
+                if nearestKillerDist <= 28.0 and not isDaggerEquipped and hum and hum.Health > 0 then
                     pcall(function()
                         hum:EquipTool(daggerTool)
                     end)
@@ -3091,7 +3113,29 @@ end)
 AutoParryGroupBox:AddToggle("AutoParry", {
     Text = "Auto Parry (Parrying Dagger)",
     Default = false,
-    Tooltip = "Automatically executes 0.8s Parrying Dagger counter stance to protect yourself before killer hits connect",
+    Tooltip = "Can only activate if you have Parrying Dagger in inventory. Executes 0.8s counter stance before killer hits.",
+    Callback = function(val)
+        if val then
+            local dagger = getParryingDagger()
+            if not dagger then
+                pcall(function()
+                    Library:Notify({
+                        Title = "Auto Parry (VD 2.7)",
+                        Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
+                        Time = 5,
+                    })
+                end)
+            else
+                pcall(function()
+                    Library:Notify({
+                        Title = "Auto Parry (VD 2.7)",
+                        Description = "Parrying Dagger verified! Auto Parry is active and ready to defend you.",
+                        Time = 4,
+                    })
+                end)
+            end
+        end
+    end,
 })
 
 local daggerStatusLabel = AutoParryGroupBox:AddLabel("Dagger Status: Checking...")
@@ -3117,6 +3161,17 @@ AutoParryGroupBox:AddToggle("ParryFaceCheck", {
 AutoParryGroupBox:AddDivider()
 
 AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
+    local dagger = getParryingDagger()
+    if not dagger then
+        pcall(function()
+            Library:Notify({
+                Title = "Auto Parry",
+                Description = "Cannot parry: You do not have a Parrying Dagger in inventory!",
+                Time = 4,
+            })
+        end)
+        return
+    end
     executeParry("MANUAL_TEST")
 end)
 
@@ -3328,12 +3383,12 @@ task.spawn(function()
                     if isOnCd then
                         daggerStatusLabel:SetText("Dagger: On Cooldown (" .. tool.Name .. ")")
                     elseif isEquipped then
-                        daggerStatusLabel:SetText("Dagger: Equipped & Ready (" .. tool.Name .. ")")
+                        daggerStatusLabel:SetText("Dagger: Equipped & Ready (Can Activate)")
                     else
-                        daggerStatusLabel:SetText("Dagger: In Backpack & Ready (" .. tool.Name .. ")")
+                        daggerStatusLabel:SetText("Dagger: In Backpack & Ready (Can Activate)")
                     end
                 else
-                    daggerStatusLabel:SetText("Dagger: Not Found in Inventory")
+                    daggerStatusLabel:SetText("Dagger: Not in Inventory (Cannot Activate)")
                 end
             end
 
@@ -3586,8 +3641,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.6 Loaded Successfully!",
+        Description = "VD 2.7 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.6 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.7 Loaded Successfully! Enjoy!")
 end)

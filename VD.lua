@@ -2545,29 +2545,104 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     local kPos = kRoot.Position
     local dist = (kPos - myPos).Magnitude
 
-    -- 4. Elevation Check: Filter out extreme vertical distances (e.g. different floor/roof > 11 studs)
+    -- 4. Elevation Check: Filter out extreme vertical distances (e.g. different floor/roof > 7.5 studs)
     local yDiff = math.abs(kPos.Y - myPos.Y)
-    if yDiff > 11.0 then
+    if yDiff > 7.5 then
         return
     end
 
-    -- 5. Distance check: Killer must be within striking/lunge range (allowing lunge margin)
-    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 16.0
-    if dist > (maxDist + 8.0) then
-        return
-    end
+    -- 5. Calculate Flat Horizontal Coordinates (immune to vertical head tilt or slopes)
+    local flatKPos = Vector2.new(kPos.X, kPos.Z)
+    local flatMyPos = Vector2.new(myPos.X, myPos.Z)
+    local flatDist = (flatMyPos - flatKPos).Magnitude
 
-    -- 6. Aim Cone & Trajectory Check:
-    -- In close combat (<= 14 studs), killer weapon swing/lunge sweeps connect regardless of facing angle!
-    -- Only check angle if killer is further than 14 studs.
+    local kLook3D = kRoot.CFrame.LookVector
+    local flatKLook = Vector2.new(kLook3D.X, kLook3D.Z).Unit
+    local flatToMe = (flatMyPos - flatKPos).Unit
+
+    -- Calculate horizontal aim alignment:
+    -- 1.0 = killer looking directly at player's center
+    -- 0.707 = 45 degrees
+    -- 0.50 = 60 degrees
+    -- 0.0 = 90 degrees (sideways)
+    -- < 0.0 = facing away
+    local aimDot = flatKLook:Dot(flatToMe)
+
+    -- 6. SMART FACING CHECK:
+    -- The killer MUST face directly towards our character ("killer hit តម្រង់មកមុខយើង")!
+    -- If killer is not facing our character, DO NOT PARRY (hitting air)!
     local doFaceCheck = not Toggles.ParryFaceCheck or Toggles.ParryFaceCheck.Value
-    if doFaceCheck and dist > 14.0 then
-        local toMe = (myPos - kPos).Unit
-        local kLook = kRoot.CFrame.LookVector
-        local aimDot = kLook:Dot(toMe)
-        -- Only ignore if killer is facing completely away (> 102 degrees away)
-        if aimDot < -0.20 then
+    if doFaceCheck then
+        if flatDist <= 4.0 then
+            -- At point-blank, killer must still face towards player (cannot face backwards)
+            if aimDot < 0.20 then
+                return -- Killer is facing away from player even at point-blank
+            end
+        elseif flatDist <= 9.0 then
+            -- In standard melee range, killer must be facing towards player (within ~55 degrees)
+            if aimDot < 0.55 then
+                return -- Killer is swinging sideways or hitting air away from player
+            end
+        else
+            -- At lunge distance (> 9 studs), killer must be aimed directly at player (within ~45 degrees)
+            if aimDot < 0.70 then
+                return -- Lunge is not aimed at player; will hit air
+            end
+        end
+    else
+        -- Even with face check toggled off, killer cannot be facing backwards (> 90 degrees away)
+        if aimDot < 0.0 then
             return
+        end
+    end
+
+    -- 7. SMART DISTANCE CHECK:
+    -- User's slider determines maximum parry reach (e.g. 13 studs)
+    local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13.0
+
+    -- Dynamic lunge compensation: Only add distance if killer is moving TOWARDS the player!
+    local kVel = (kRoot.AssemblyLinearVelocity or kRoot.Velocity or Vector3.zero)
+    local myVel = (myRoot.AssemblyLinearVelocity or myRoot.Velocity or Vector3.zero)
+    local relVel = kVel - myVel
+    local flatRelVel = Vector2.new(relVel.X, relVel.Z)
+    local closingSpeed = flatRelVel:Dot(flatToMe)
+
+    -- If killer is moving away from the player (closingSpeed < -1.5) and not point-blank, swing will miss air
+    if closingSpeed < -1.5 and flatDist > 5.5 then
+        return
+    end
+
+    -- Only allow lunge expansion if killer is actively running/lunging towards the player
+    local lungeBonus = 0
+    if closingSpeed > 2.0 then
+        lungeBonus = math.clamp(closingSpeed * 0.25, 0, 3.0)
+    end
+
+    local effectiveMaxDist = maxDist + lungeBonus
+    if flatDist > effectiveMaxDist then
+        return -- Killer is out of reach; attack will hit empty air!
+    end
+
+    -- 8. TARGET FOCUS CHECK:
+    -- If another survivor is closer to the killer, and the killer is aimed directly at them instead of you
+    if flatDist > 5.5 then
+        for _, otherPlayer in ipairs(Players:GetPlayers()) do
+            if otherPlayer ~= LocalPlayer and otherPlayer ~= killerPlayer and otherPlayer.Character then
+                local oRoot = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+                if oRoot and oRoot:IsA("BasePart") then
+                    local oPos = oRoot.Position
+                    local flatOPos = Vector2.new(oPos.X, oPos.Z)
+                    local oDist = (flatOPos - flatKPos).Magnitude
+                    if oDist < (flatDist - 2.5) and oDist < 7.5 then
+                        local toOther = (flatOPos - flatKPos).Unit
+                        local otherDot = flatKLook:Dot(toOther)
+                        -- Killer is locked onto the closer survivor
+                        if otherDot > 0.80 and otherDot > (aimDot + 0.20) then
+                            return -- Killer is attacking the other survivor, not you!
+                        end
+                    end
+                end
+            end
         end
     end
 
@@ -2759,7 +2834,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
         if daggerTool then
             local myRoot = char:FindFirstChild("HumanoidRootPart")
             if myRoot then
-                local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 16.0
+                local maxDist = (Options.ParryDistance and Options.ParryDistance.Value) or 13.0
                 local nearestKillerDist = 999
                 for _, player in ipairs(Players:GetPlayers()) do
                     if player ~= LocalPlayer and player.Character then
@@ -2772,8 +2847,8 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                                 nearestKillerDist = d
                             end
 
-                            -- Scan attack animations when within range (allowing 10.0 stud lunge margin)
-                            if d <= (maxDist + 10.0) then
+                            -- Scan attack animations when within range (allowing 4.0 stud lunge margin)
+                            if d <= (maxDist + 4.0) then
                                 local kAnim = pChar:FindFirstChildWhichIsA("Animator", true)
                                 if kAnim then
                                     for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
@@ -3383,18 +3458,18 @@ AutoParryGroupBox:AddDivider()
 
 AutoParryGroupBox:AddSlider("ParryDistance", {
     Text = "Parry Distance (Studs)",
-    Default = 16,
+    Default = 13,
     Min = 8,
-    Max = 24,
+    Max = 22,
     Rounding = 1,
     Compact = false,
-    Tooltip = "Maximum distance from killer to activate parry stance (dynamic lunge compensation pre-triggers stance)",
+    Tooltip = "Maximum reach to activate parry stance. Smart aim & trajectory check prevents parrying when killer hits empty air.",
 })
 
 AutoParryGroupBox:AddToggle("ParryFaceCheck", {
-    Text = "Face & Trajectory Check",
+    Text = "Smart Face & Aim Check",
     Default = true,
-    Tooltip = "Requires the killer to not be facing completely backwards (>102° away) when outside 12 studs. Inside 12 studs, auto parry always protects against 360-degree strikes.",
+    Tooltip = "Smart Parry: Only parries when killer is facing and aiming directly towards your character. Ignores strikes into the air, sideways swings, or hits aimed at other targets.",
 })
 
 AutoParryGroupBox:AddDivider()

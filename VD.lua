@@ -2218,8 +2218,18 @@ LiveUIGroupBox:AddDropdown("LiveInspectTarget", {
 
 LiveUIGroupBox:AddDivider()
 
-local inspectNameLabel = LiveUIGroupBox:AddLabel("< Name >: ...", true)
-local inspectUsernameLabel = LiveUIGroupBox:AddLabel("< @username >: ...", true)
+local function safeRichText(str)
+    if str == nil then return "" end
+    local s = tostring(str)
+    s = s:gsub("&", "&amp;")
+    s = s:gsub("<", "&lt;")
+    s = s:gsub(">", "&gt;")
+    s = s:gsub('"', "&quot;")
+    return s
+end
+
+local inspectNameLabel = LiveUIGroupBox:AddLabel("&lt; Name &gt;: Select player", true)
+local inspectUsernameLabel = LiveUIGroupBox:AddLabel("&lt; @username &gt;: None", true)
 local inspectRoleLabel = LiveUIGroupBox:AddLabel("Role: ...")
 local inspectItemLabel = LiveUIGroupBox:AddLabel("Equipped Item: ...", true)
 
@@ -2241,25 +2251,25 @@ local function updateLiveInspector()
 
     local info = getPlayerPerksAndItems(targetPlayer)
     if inspectNameLabel and inspectNameLabel.SetText then
-        inspectNameLabel:SetText("< " .. info.name .. " >")
+        inspectNameLabel:SetText("&lt; " .. safeRichText(info.name) .. " &gt;")
     end
     if inspectUsernameLabel and inspectUsernameLabel.SetText then
-        inspectUsernameLabel:SetText("< " .. info.username .. " >")
+        inspectUsernameLabel:SetText("&lt; " .. safeRichText(info.username) .. " &gt;")
     end
     if inspectRoleLabel and inspectRoleLabel.SetText then
-        inspectRoleLabel:SetText("Role: " .. info.role)
+        inspectRoleLabel:SetText("Role: " .. safeRichText(info.role))
     end
     if inspectItemLabel and inspectItemLabel.SetText then
-        inspectItemLabel:SetText("Equipped Item: " .. info.equippedItem)
+        inspectItemLabel:SetText("Equipped Item: " .. safeRichText(info.equippedItem))
     end
     if inspectPerk1Label and inspectPerk1Label.SetText then
-        inspectPerk1Label:SetText("Perk 1: " .. info.perks[1])
+        inspectPerk1Label:SetText("Perk 1: " .. safeRichText(info.perks[1]))
     end
     if inspectPerk2Label and inspectPerk2Label.SetText then
-        inspectPerk2Label:SetText("Perk 2: " .. info.perks[2])
+        inspectPerk2Label:SetText("Perk 2: " .. safeRichText(info.perks[2]))
     end
     if inspectPerk3Label and inspectPerk3Label.SetText then
-        inspectPerk3Label:SetText("Perk 3: " .. info.perks[3])
+        inspectPerk3Label:SetText("Perk 3: " .. safeRichText(info.perks[3]))
     end
 end
 

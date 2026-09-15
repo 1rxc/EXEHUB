@@ -857,7 +857,7 @@ local function setupPlayer(player)
     end)
 
     connections[#connections + 1] = player.CharacterRemoving:Connect(function(oldChar)
-        if oldChar then
+        if pendingCombatChars and oldChar then
             pendingCombatChars[oldChar] = nil
         end
         if playerHighlights[player] then
@@ -2305,8 +2305,6 @@ end
 local lastParryTick = 0
 local parriedTracks = {}
 local cachedMobileParryButtons = {}
-local combatBoundAnimators = {}
-local pendingCombatChars = {}
 
 local NonDamageActionKeywords = {
     "generator", "pallet", "door", "pickup", "drop", "hook", "unhook",
@@ -2524,9 +2522,10 @@ local function getParryingDagger()
         end
     end
 
-    -- 8. Check PlayerGui (GUI Item Slots & Touch Buttons)
+    -- 8. Check PlayerGui (GUI Item Slots & Touch Buttons - throttled)
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if pg then
+    if pg and (tick() - (lastGuiDaggerCheck or 0) > 1.5) then
+        lastGuiDaggerCheck = tick()
         for _, desc in ipairs(pg:GetDescendants()) do
             if desc:IsA("ImageButton") or desc:IsA("TextButton") or desc:IsA("ImageLabel") or desc:IsA("TextLabel") then
                 local dName = desc.Name:lower()
@@ -2949,8 +2948,8 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         lungeBonus = math.max(lungeBonus, 3.5)
     end
 
-    -- EARLY INTERCEPT: Minimum 17.5 studs reach ensures attacks are parried at swing startup, not point-blank!
-    local effectiveMaxDist = math.max(sliderDist + lungeBonus, 17.5)
+    -- EARLY INTERCEPT: Minimum 22.5 studs reach ensures attacks are parried at swing startup, not point-blank!
+    local effectiveMaxDist = math.max(sliderDist + lungeBonus, 22.5)
     if flatDist > effectiveMaxDist then
         return -- Killer is out of reach; attack will hit empty air!
     end
@@ -3181,8 +3180,8 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                                 nearestKillerDist = d
                             end
 
-                            -- Scan attack animations with early detection margin (up to 22 studs)
-                            if d <= math.max(maxDist + 6.0, 22.0) then
+                            -- Scan attack animations with early detection margin (up to 25 studs)
+                            if d <= math.max(maxDist + 8.0, 25.0) then
                                 local kAnim = (pChar:FindFirstChildOfClass("Humanoid") and pChar.Humanoid:FindFirstChildOfClass("Animator")) or pChar:FindFirstChildWhichIsA("Animator", true)
                                 if kAnim then
                                     for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do

@@ -627,15 +627,15 @@ local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
     Name = "Auto Parry (Parrying Dagger)",
 })
 
--- Inside Vault Tab: Fast Vault & Mechanics (Left) and Pallet & Obstacle Settings (Right)
-local VaultMainGroupBox = Tabs.Vault:AddGroupbox({
+-- Inside Vault Tab: Fast Vault (Left) and Information (Right)
+local VaultGroupBox = Tabs.Vault:AddGroupbox({
     Side = "Left",
-    Name = "Fast Vault Mechanics",
+    Name = "Fast Vault",
 })
 
-local VaultPalletGroupBox = Tabs.Vault:AddGroupbox({
+local VaultInfoGroupBox = Tabs.Vault:AddGroupbox({
     Side = "Right",
-    Name = "Pallet & Obstacle Settings",
+    Name = "Information & Status",
 })
 
 -- Inside Optimize Tab: Ping & MS Booster (Left) and Network Status (Right)
@@ -840,19 +840,18 @@ local function bindLocalCharacterAntiStun(char)
 end
 
 ----------------------------------------------------------------------
--- VAULT & PALLET SYSTEM (VD 2.9.6 - FAST VAULT & PALLET MECHANICS)
+-- FAST VAULT SYSTEM (VD 2.9.6 - FAST PALLET SLIDE & WINDOW VAULT BOOST)
 ----------------------------------------------------------------------
 
 local VaultKeywords = {
     "vault", "vaulting", "fastvault", "slowvault", "medvault", "mediumvault",
     "palletvault", "windowvault", "pallet_vault", "window_vault", "pallet_slide",
-    "slide", "hurdle", "mantle", "hopover", "jumpover", "climbover", "climb_over",
-    "obstacle_vault", "obstacle"
+    "palletslide", "slide", "hurdle", "mantle", "hopover", "jumpover",
+    "climbover", "climb_over", "obstacle_vault", "obstacle", "hop", "climb",
+    "pallet"
 }
 
-local PalletKeywords = {
-    "droppallet", "drop_pallet", "pulldown", "pull_down", "palletdrop", "pallet_drop"
-}
+local lastVaultInteractionTime = 0
 
 local function isVaultAnimation(track)
     if not track then return false end
@@ -867,19 +866,13 @@ local function isVaultAnimation(track)
             return true
         end
     end
-    return false
-end
-
-local function isPalletDropAnimation(track)
-    if not track then return false end
-    local tName = (track.Name or ""):lower()
-    local animId = ""
-    if track.Animation then
-        animId = tostring(track.Animation.AnimationId or ""):lower()
-        tName = tName .. " " .. (track.Animation.Name or ""):lower()
-    end
-    for _, kw in ipairs(PalletKeywords) do
-        if tName:find(kw) or animId:find(kw) then
+    -- Detect action priority animation started during/right after vault or pallet interaction
+    if (tick() - lastVaultInteractionTime < 1.2) and track.Looped == false then
+        local prio = track.Priority
+        if prio == Enum.AnimationPriority.Action 
+            or prio == Enum.AnimationPriority.Action2 
+            or prio == Enum.AnimationPriority.Action3 
+            or prio == Enum.AnimationPriority.Action4 then
             return true
         end
     end
@@ -907,25 +900,17 @@ local function optimizeVaultPrompt(prompt)
     if not originalPromptProps[prompt] then
         originalPromptProps[prompt] = {
             HoldDuration = prompt.HoldDuration,
-            MaxActivationDistance = prompt.MaxActivationDistance,
             RequiresLineOfSight = prompt.RequiresLineOfSight
         }
     end
 
     if Toggles.FastVault and Toggles.FastVault.Value then
-        if Toggles.InstantVaultPrompt and Toggles.InstantVaultPrompt.Value then
-            prompt.HoldDuration = 0
-        end
-        if Toggles.ExtendVaultRange and Toggles.ExtendVaultRange.Value then
-            local dist = (Options.VaultReachDistance and Options.VaultReachDistance.Value) or 15
-            prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, dist)
-        end
+        prompt.HoldDuration = 0
         prompt.RequiresLineOfSight = false
     else
         local orig = originalPromptProps[prompt]
         if orig then
             prompt.HoldDuration = orig.HoldDuration
-            prompt.MaxActivationDistance = orig.MaxActivationDistance
             prompt.RequiresLineOfSight = orig.RequiresLineOfSight
         end
     end
@@ -937,6 +922,72 @@ local function updateAllVaultPrompts()
             optimizeVaultPrompt(desc)
         end
     end
+end
+
+local activeVaultBoost = false
+local vaultStatusLabel = nil
+
+local function applyFastVaultSlideBoost(char, track)
+    if activeVaultBoost then return end
+    activeVaultBoost = true
+
+    task.spawn(function()
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not root or not hum then
+            activeVaultBoost = false
+            return
+        end
+
+        local mult = (Options.VaultSpeedMultiplier and Options.VaultSpeedMultiplier.Value) or 2.5
+        local boostSpeed = (Options.VaultBoostSpeed and Options.VaultBoostSpeed.Value) or 42
+        local look = root.CFrame.LookVector
+        local t0 = tick()
+
+        pcall(function()
+            if vaultStatusLabel then
+                vaultStatusLabel:SetText("Status: Boosting Slide...")
+            end
+        end)
+
+        pcall(function()
+            track:AdjustSpeed(mult)
+        end)
+
+        -- Smoothly boost forward through the pallet slide or window vault
+        while track.IsPlaying and (tick() - t0 < 0.8) do
+            if not (Toggles.FastVault and Toggles.FastVault.Value) then break end
+            pcall(function()
+                track:AdjustSpeed(mult)
+                local vy = root.AssemblyLinearVelocity.Y
+                root.AssemblyLinearVelocity = Vector3.new(look.X * boostSpeed, vy, look.Z * boostSpeed)
+                if hum and hum.WalkSpeed < defaultSpeed then
+                    hum.WalkSpeed = defaultSpeed
+                end
+            end)
+            RunService.Heartbeat:Wait()
+        end
+
+        -- Instant recovery upon landing (no slowdown or fatigue)
+        pcall(function()
+            hum.PlatformStand = false
+            hum.Sit = false
+            if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
+                if applyPlayerSpeed then applyPlayerSpeed() end
+            else
+                hum.WalkSpeed = defaultSpeed
+            end
+        end)
+
+        pcall(function()
+            if vaultStatusLabel then
+                vaultStatusLabel:SetText("Status: Ready")
+            end
+        end)
+
+        task.wait(0.1)
+        activeVaultBoost = false
+    end)
 end
 
 local function bindLocalCharacterVault(char)
@@ -952,50 +1003,7 @@ local function bindLocalCharacterVault(char)
                 if not (Toggles.FastVault and Toggles.FastVault.Value) then return end
 
                 if isVaultAnimation(track) then
-                    local isPallet = (track.Name or ""):lower():find("pallet") or (track.Animation and (track.Animation.Name or ""):lower():find("pallet"))
-                    if isPallet and Toggles.FastPalletVault and not Toggles.FastPalletVault.Value then
-                        return
-                    end
-
-                    local mult = (Options.VaultSpeedMultiplier and Options.VaultSpeedMultiplier.Value) or 2.5
-                    pcall(function()
-                        track:AdjustSpeed(mult)
-                    end)
-
-                    if Toggles.VaultForwardBoost and Toggles.VaultForwardBoost.Value and root then
-                        task.spawn(function()
-                            local boostSpeed = (Options.VaultBoostSpeed and Options.VaultBoostSpeed.Value) or 32
-                            local look = root.CFrame.LookVector
-                            local t0 = tick()
-                            while track.IsPlaying and (tick() - t0 < 1.0) do
-                                if not (Toggles.FastVault and Toggles.FastVault.Value) then break end
-                                pcall(function()
-                                    track:AdjustSpeed(mult)
-                                    local vy = root.AssemblyLinearVelocity.Y
-                                    root.AssemblyLinearVelocity = Vector3.new(look.X * boostSpeed, vy, look.Z * boostSpeed)
-                                    if hum and hum.WalkSpeed < defaultSpeed then
-                                        hum.WalkSpeed = defaultSpeed
-                                    end
-                                end)
-                                RunService.Heartbeat:Wait()
-                            end
-
-                            if Toggles.NoVaultSlowdown and Toggles.NoVaultSlowdown.Value and hum then
-                                pcall(function()
-                                    hum.PlatformStand = false
-                                    if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
-                                        if applyPlayerSpeed then applyPlayerSpeed() end
-                                    else
-                                        hum.WalkSpeed = defaultSpeed
-                                    end
-                                end)
-                            end
-                        end)
-                    end
-                elseif isPalletDropAnimation(track) and Toggles.FastPalletDrop and Toggles.FastPalletDrop.Value then
-                    pcall(function()
-                        track:AdjustSpeed(2.5)
-                    end)
+                    applyFastVaultSlideBoost(char, track)
                 end
             end)
         end
@@ -3933,17 +3941,17 @@ end)
 -- UI ELEMENTS (VAULT TAB)
 ----------------------------------------------------------------------
 
--- Left Side: Fast Vault Mechanics
-VaultMainGroupBox:AddToggle("FastVault", {
-    Text = "Fast Vault (All Obstacles)",
+-- Left Side: Fast Vault Controls (Keeps ONLY Fast Vault)
+VaultGroupBox:AddToggle("FastVault", {
+    Text = "Fast Vault (Slide & Window)",
     Default = false,
-    Tooltip = "Accelerates all vault animations and propels you swiftly across windows, pallets, and low obstacles.",
+    Tooltip = "When turned on, sliding over pallets or vaulting through windows gives you an instant fast slide boost.",
     Callback = function(val)
         if val then
             pcall(function()
                 Library:Notify({
-                    Title = "Vault System (VD 2.9.6)",
-                    Description = "Fast Vault Activated! Windows, pallets, and obstacles will vault at accelerated speed.",
+                    Title = "Fast Vault (VD 2.9.6)",
+                    Description = "Fast Vault Active: Slide on pallets & vault windows with boosted speed!",
                     Time = 4,
                 })
             end)
@@ -3952,95 +3960,35 @@ VaultMainGroupBox:AddToggle("FastVault", {
     end,
 })
 
-VaultMainGroupBox:AddSlider("VaultSpeedMultiplier", {
-    Text = "Vault Speed Multiplier",
+VaultGroupBox:AddDivider()
+
+VaultGroupBox:AddSlider("VaultBoostSpeed", {
+    Text = "Slide Boost Speed",
+    Default = 42,
+    Min = 25,
+    Max = 75,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = "Forward velocity impulse applied when sliding across pallets or vaulting windows.",
+})
+
+VaultGroupBox:AddSlider("VaultSpeedMultiplier", {
+    Text = "Vault Animation Speed",
     Default = 2.5,
-    Min = 1.2,
+    Min = 1.5,
     Max = 5.0,
     Rounding = 1,
     Compact = false,
-    Tooltip = "Playback speed for vault animations (2.5x makes vaults instant and ultra-fast).",
+    Tooltip = "Animation playback speed multiplier for fast traversal.",
 })
 
-VaultMainGroupBox:AddDivider()
-
-VaultMainGroupBox:AddToggle("VaultForwardBoost", {
-    Text = "Forward Momentum Boost",
-    Default = true,
-    Tooltip = "Applies smooth forward velocity while vaulting to prevent clipping or getting stuck on obstacles.",
-})
-
-VaultMainGroupBox:AddSlider("VaultBoostSpeed", {
-    Text = "Boost Velocity",
-    Default = 32,
-    Min = 16,
-    Max = 60,
-    Rounding = 0,
-    Compact = false,
-    Tooltip = "Velocity speed applied during vault traversal.",
-})
-
-VaultMainGroupBox:AddDivider()
-
-VaultMainGroupBox:AddToggle("NoVaultSlowdown", {
-    Text = "No Vault Slowdown",
-    Default = true,
-    Tooltip = "Prevents landing fatigue or post-vault walkspeed reduction, allowing instant sprint continuation.",
-})
-
--- Right Side: Pallet & Obstacle Settings
-VaultPalletGroupBox:AddToggle("FastPalletVault", {
-    Text = "Fast Pallet Vault",
-    Default = true,
-    Tooltip = "Specifically accelerates sliding and vaulting over dropped pallets.",
-})
-
-VaultPalletGroupBox:AddToggle("FastPalletDrop", {
-    Text = "Fast Pallet Drop / Pull",
-    Default = true,
-    Tooltip = "Accelerates pallet pull-down animations so killers cannot hit you mid-drop.",
-})
-
-VaultPalletGroupBox:AddDivider()
-
-VaultPalletGroupBox:AddToggle("InstantVaultPrompt", {
-    Text = "Instant Vault Prompt (0s Hold)",
-    Default = true,
-    Tooltip = "Removes hold duration on all vault and pallet interaction prompts for instant 1-tap activation.",
-    Callback = function()
-        updateAllVaultPrompts()
-    end,
-})
-
-VaultPalletGroupBox:AddToggle("ExtendVaultRange", {
-    Text = "Extended Vault Reach",
-    Default = true,
-    Tooltip = "Increases interaction distance for vault prompts so you can initiate vaults earlier while sprinting.",
-    Callback = function()
-        updateAllVaultPrompts()
-    end,
-})
-
-VaultPalletGroupBox:AddSlider("VaultReachDistance", {
-    Text = "Vault Activation Distance",
-    Default = 15,
-    Min = 8,
-    Max = 25,
-    Rounding = 0,
-    Compact = false,
-    Tooltip = "Maximum reach distance (studs) to trigger vault prompts.",
-    Callback = function()
-        updateAllVaultPrompts()
-    end,
-})
-
-VaultPalletGroupBox:AddDivider()
-
-VaultPalletGroupBox:AddToggle("AutoVaultAssist", {
-    Text = "Auto Jump-Vault Assist",
-    Default = false,
-    Tooltip = "When holding or pressing Space near any vaultable obstacle, automatically triggers the vault prompt.",
-})
+-- Right Side: Fast Vault Information
+vaultStatusLabel = VaultInfoGroupBox:AddLabel("Status: Ready")
+VaultInfoGroupBox:AddDivider()
+VaultInfoGroupBox:AddLabel("• Pallet Slide: Instant fast slide across pallets.")
+VaultInfoGroupBox:AddLabel("• Window Vault: Fast propelled window traversal.")
+VaultInfoGroupBox:AddLabel("• Zero Landing Delay: Immediate full sprint on landing.")
+VaultInfoGroupBox:AddLabel("• Instant Prompt: 0s hold on pallet & window prompts.")
 
 ----------------------------------------------------------------------
 -- UI ELEMENTS (OPTIMIZE TAB)
@@ -4213,15 +4161,8 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
             local mult = (Options.VaultSpeedMultiplier and Options.VaultSpeedMultiplier.Value) or 2.5
             for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
                 if isVaultAnimation(track) then
-                    local isPallet = (track.Name or ""):lower():find("pallet") or (track.Animation and (track.Animation.Name or ""):lower():find("pallet"))
-                    if not (isPallet and Toggles.FastPalletVault and not Toggles.FastPalletVault.Value) then
-                        if track.Speed ~= mult then
-                            pcall(function() track:AdjustSpeed(mult) end)
-                        end
-                    end
-                elseif isPalletDropAnimation(track) and Toggles.FastPalletDrop and Toggles.FastPalletDrop.Value then
-                    if track.Speed ~= 2.5 then
-                        pcall(function() track:AdjustSpeed(2.5) end)
+                    if track.Speed ~= mult then
+                        pcall(function() track:AdjustSpeed(mult) end)
                     end
                 end
             end
@@ -4229,7 +4170,7 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     end
 end)
 
--- Proximity Prompt Hooking for Instant Vaults & Obstacles
+-- Proximity Prompt Hooking for Instant Vaults & Pallet Slides
 connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
     if descendant:IsA("ProximityPrompt") and isVaultPrompt(descendant) then
         optimizeVaultPrompt(descendant)
@@ -4243,8 +4184,9 @@ pcall(function()
         end
     end)
     connections[#connections + 1] = ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt, player)
-        if player == LocalPlayer and Toggles.FastVault and Toggles.FastVault.Value and isVaultPrompt(prompt) then
-            if Toggles.InstantVaultPrompt and Toggles.InstantVaultPrompt.Value then
+        if player == LocalPlayer and isVaultPrompt(prompt) then
+            lastVaultInteractionTime = tick()
+            if Toggles.FastVault and Toggles.FastVault.Value then
                 pcall(function()
                     if fireproximityprompt then
                         fireproximityprompt(prompt, 0)
@@ -4253,32 +4195,11 @@ pcall(function()
             end
         end
     end)
-end)
-
--- Jump-Vault Assist: Triggers nearby vault prompt when Space is pressed
-connections[#connections + 1] = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.Space then
-        if Toggles.FastVault and Toggles.FastVault.Value and Toggles.AutoVaultAssist and Toggles.AutoVaultAssist.Value then
-            pcall(function()
-                local char = LocalPlayer.Character
-                local root = char and char:FindFirstChild("HumanoidRootPart")
-                if not root then return end
-                local maxDist = (Options.VaultReachDistance and Options.VaultReachDistance.Value) or 15
-                for _, prompt in ipairs(Workspace:GetDescendants()) do
-                    if prompt:IsA("ProximityPrompt") and prompt.Enabled and isVaultPrompt(prompt) then
-                        local part = prompt.Parent:IsA("BasePart") and prompt.Parent or prompt.Parent:FindFirstChildWhichIsA("BasePart")
-                        if part and (part.Position - root.Position).Magnitude <= maxDist then
-                            if fireproximityprompt then
-                                fireproximityprompt(prompt, 0)
-                                break
-                            end
-                        end
-                    end
-                end
-            end)
+    connections[#connections + 1] = ProximityPromptService.PromptTriggered:Connect(function(prompt, player)
+        if player == LocalPlayer and isVaultPrompt(prompt) then
+            lastVaultInteractionTime = tick()
         end
-    end
+    end)
 end)
 
 -- Initial scan for all existing vault prompts in map

@@ -1719,38 +1719,6 @@ pcall(function()
                     end
                 end
             end
-
-            -- Silent Aim Hook for Twist of Fate (100% Hit Chance)
-            if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.SilentAim and Toggles.SilentAim.Value) then
-                local gun, isEq = getTwistOfFate()
-                if isEq then
-                    local _, killerChar = getActiveKiller()
-                    if killerChar then
-                        local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
-                            and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
-                            or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
-
-                        if targetPart then
-                            -- 1. Raycast redirect
-                            if (method == "Raycast" or method == "raycast") and self == Workspace then
-                                local args = {...}
-                                if #args >= 2 and typeof(args[1]) == "Vector3" and typeof(args[2]) == "Vector3" then
-                                    local origin = args[1]
-                                    local dir = (targetPart.Position - origin).Unit * 1000
-                                    args[2] = dir
-                                    return oldNamecall(self, unpack(args))
-                                end
-                            end
-
-                            -- 2. FindPartOnRay redirect
-                            if (method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") and self == Workspace then
-                                return targetPart, targetPart.Position, Vector3.new(0, 1, 0), Enum.Material.Plastic
-                            end
-                        end
-                    end
-                end
-            end
-
             return oldNamecall(self, ...)
         end))
     end
@@ -1780,58 +1748,6 @@ local function hookStunRemotes()
 end
 
 task.defer(hookStunRemotes)
-
--- Mouse.Hit Silent Aim Hook for 100% Shot Accuracy on Twist of Fate
-pcall(function()
-    local gmt = getrawmetatable(game)
-    if gmt and setreadonly then
-        setreadonly(gmt, false)
-        local oldIndex = gmt.__index
-        gmt.__index = newcclosure(function(self, key)
-            if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.SilentAim and Toggles.SilentAim.Value) then
-                local gun, isEq = getTwistOfFate()
-                if isEq then
-                    local _, killerChar = getActiveKiller()
-                    if killerChar then
-                        local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
-                            and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
-                            or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
-                        if targetPart then
-                            if key == "Hit" then
-                                return CFrame.new(targetPart.Position)
-                            elseif key == "Target" then
-                                return targetPart
-                            end
-                        end
-                    end
-                end
-            end
-            return oldIndex(self, key)
-        end)
-        setreadonly(gmt, true)
-    end
-end)
-
--- Anti-Misfire Hook: 100% Fire Chance (forces weapon RNG checks to roll success)
-pcall(function()
-    if hookfunction then
-        local oldMathRandom
-        oldMathRandom = hookfunction(math.random, newcclosure(function(...)
-            local args = {...}
-            if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.AntiMisfire and Toggles.AntiMisfire.Value) then
-                local _, isEq = getTwistOfFate()
-                if isEq then
-                    if #args == 0 then
-                        return 0.05 -- Less than 0.60 (guaranteed fire)
-                    elseif #args == 2 and args[1] == 1 and args[2] == 100 then
-                        return 1 -- 1 out of 100 is <= 60%
-                    end
-                end
-            end
-            return oldMathRandom(...)
-        end))
-    end
-end)
 
 -- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
@@ -2817,6 +2733,40 @@ local function getActiveKiller()
 
     return nil, nil
 end
+
+-- Safe Mouse.Hit hook on Mouse instance metatable only (bypasses game metatable, zero impact on core game scripts)
+pcall(function()
+    local mouse = LocalPlayer:GetMouse()
+    if mouse then
+        local mouseMt = getrawmetatable(mouse)
+        if mouseMt and setreadonly then
+            setreadonly(mouseMt, false)
+            local oldMouseIndex = mouseMt.__index
+            mouseMt.__index = newcclosure(function(self, key)
+                if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.SilentAim and Toggles.SilentAim.Value) then
+                    local gun, isEq = getTwistOfFate()
+                    if isEq then
+                        local _, killerChar = getActiveKiller()
+                        if killerChar then
+                            local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
+                                and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
+                                or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
+                            if targetPart then
+                                if key == "Hit" then
+                                    return CFrame.new(targetPart.Position)
+                                elseif key == "Target" then
+                                    return targetPart
+                                end
+                            end
+                        end
+                    end
+                end
+                return oldMouseIndex(self, key)
+            end)
+            setreadonly(mouseMt, true)
+        end
+    end
+end)
 
 local function isAttacker(player, char, track)
     if not player and not char then return false end
@@ -4217,11 +4167,6 @@ TwistOfFateGroupBox:AddSlider("AimSmoothSpeed", {
     Tooltip = "Controls how smoothly the camera glides onto the killer. Default 18 provides 100% buttery smooth tracking at any framerate.",
 })
 
-TwistOfFateGroupBox:AddToggle("AntiMisfire", {
-    Text = "100% Fire Chance (Anti-Misfire)",
-    Default = true,
-    Tooltip = "Bypasses the 40% misfire gamble by forcing firearm client RNG to always roll success, ensuring the gun fires 100% of the time.",
-})
 
 TwistOfFateGroupBox:AddDropdown("AimTargetPart", {
     Values = { "Torso (100% Hitbox)", "Head" },

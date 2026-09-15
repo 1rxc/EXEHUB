@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9.2 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.3 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -66,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.2",
+    Footer = "VD 2.9.3",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -876,9 +876,139 @@ local function setupPlayer(player)
     end
 end
 
-local function updateGenHighlight(hl)
+local function isGeneratorFixed(instance)
+    if not instance or not instance.Parent then return true end
+
+    -- Check direct instance and parent model/folder
+    local targets = { instance }
+    if instance.Parent and (instance.Parent:IsA("Model") or instance.Parent:IsA("Folder")) then
+        table.insert(targets, instance.Parent)
+    end
+
+    for _, target in ipairs(targets) do
+        -- 1. CollectionService Tags
+        for _, tag in ipairs({"Fixed", "Completed", "Done", "Repaired", "Powered", "Finished", "ActiveGen"}) do
+            if CollectionService:HasTag(target, tag) then
+                return true
+            end
+        end
+
+        -- 2. Attributes on generator
+        for _, attr in ipairs({
+            "Fixed", "Done", "Completed", "Repaired", "Finished",
+            "Activated", "Powered", "IsDone", "IsFixed", "IsRepaired",
+            "Complete", "Power", "GenDone", "GenFixed"
+        }) do
+            local val = target:GetAttribute(attr)
+            if val == true then
+                return true
+            end
+        end
+
+        -- Progress attribute check (handles both 0-100 and normalized 0-1 scales)
+        for _, progAttr in ipairs({"Progress", "RepairProgress", "Percent", "GenProgress", "FixProgress", "Completion"}) do
+            local pVal = target:GetAttribute(progAttr)
+            if typeof(pVal) == "number" then
+                local maxProg = target:GetAttribute("MaxProgress") or target:GetAttribute("Max") or 100
+                if maxProg > 1 then
+                    if pVal >= (maxProg - 0.5) or pVal >= 99.5 then return true end
+                else
+                    if pVal >= 0.995 then return true end
+                end
+            end
+        end
+
+        -- 3. ValueObjects directly in target
+        for _, child in ipairs(target:GetChildren()) do
+            local cName = child.Name:lower()
+            if child:IsA("BoolValue") then
+                if (cName:find("fixed") or cName:find("done") or cName:find("complete") or cName:find("repair") or cName:find("finish") or cName:find("power")) then
+                    if child.Value == true then
+                        return true
+                    end
+                end
+            elseif child:IsA("NumberValue") or child:IsA("IntValue") then
+                if (cName:find("progress") or cName:find("percent") or cName == "repair" or cName == "fix") then
+                    local maxVal = target:FindFirstChild("MaxProgress") or target:FindFirstChild("Max")
+                    local maxNum = (maxVal and maxVal:IsA("NumberValue") and maxVal.Value) or 100
+                    if maxNum > 1 then
+                        if child.Value >= (maxNum - 0.5) or child.Value >= 99.5 then return true end
+                    else
+                        if child.Value >= 0.995 then return true end
+                    end
+                end
+            elseif child:IsA("StringValue") then
+                if cName:find("state") or cName:find("status") then
+                    local sVal = child.Value:lower()
+                    if sVal:find("done") or sVal:find("fixed") or sVal:find("complete") or sVal:find("repaired") or sVal:find("power") then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    -- 4. Deep search inside Model descendants for Progress/Status ValueObjects and Prompts
+    local model = instance:IsA("Model") and instance or (instance.Parent and instance.Parent:IsA("Model") and instance.Parent) or instance
+    local foundRepairPrompt = false
+    local hasActiveRepairPrompt = false
+
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") then
+            local pText = (desc.ObjectText .. " " .. desc.ActionText):lower()
+            if pText:find("repair") or pText:find("fix") or pText:find("generator") or pText:find("gen") or pText == " " or pText == "" then
+                foundRepairPrompt = true
+                if desc.Enabled and desc.MaxActivationDistance > 0 then
+                    hasActiveRepairPrompt = true
+                end
+            end
+        elseif desc:IsA("BoolValue") then
+            local dName = desc.Name:lower()
+            if (dName == "fixed" or dName == "done" or dName == "completed" or dName == "repaired" or dName == "isdone" or dName == "isfixed") and desc.Value == true then
+                return true
+            end
+        elseif desc:IsA("NumberValue") or desc:IsA("IntValue") then
+            local dName = desc.Name:lower()
+            if (dName == "progress" or dName == "repairprogress" or dName == "percent") and desc.Value >= 99.5 then
+                return true
+            end
+        elseif desc:IsA("StringValue") then
+            local dName = desc.Name:lower()
+            if (dName == "state" or dName == "status") then
+                local s = desc.Value:lower()
+                if s:find("done") or s:find("fixed") or s:find("complete") or s:find("repaired") or s:find("power") then
+                    return true
+                end
+            end
+        end
+    end
+
+    -- If a repair prompt was found on the generator and is now disabled, it is completed!
+    if foundRepairPrompt and not hasActiveRepairPrompt then
+        return true
+    end
+
+    return false
+end
+
+local function updateGenHighlight(hl, genInstance)
     if not hl or not hl.Parent then return end
-    hl.Enabled = Toggles.HighlightGenerators.Value
+
+    local gen = genInstance or hl.Adornee or hl.Parent
+    local isGenEnabled = Toggles.HighlightGenerators and Toggles.HighlightGenerators.Value == true
+
+    if not isGenEnabled then
+        hl.Enabled = false
+        return
+    end
+
+    -- Highlight ONLY un-fixed generators; when fixed/done, do NOT highlight
+    if isGeneratorFixed(gen) then
+        hl.Enabled = false
+        return
+    end
+
+    hl.Enabled = true
     hl.FillColor = Options.GenFillColor.Value
 
     local showOutline = (Toggles.GenOutline and Toggles.GenOutline.Value) or false
@@ -888,8 +1018,8 @@ local function updateGenHighlight(hl)
 end
 
 local function updateAllGeneratorHighlights()
-    for _, hl in pairs(generatorHighlights) do
-        updateGenHighlight(hl)
+    for genInstance, hl in pairs(generatorHighlights) do
+        updateGenHighlight(hl, genInstance)
     end
 end
 
@@ -907,7 +1037,35 @@ local function registerGenerator(genInstance)
     hl.Parent = genInstance
 
     generatorHighlights[genInstance] = hl
-    updateGenHighlight(hl)
+    updateGenHighlight(hl, genInstance)
+
+    -- Real-time reactive updates: listen for changes on attributes and prompts
+    local function onGenStateChanged()
+        updateGenHighlight(hl, genInstance)
+    end
+
+    genInstance.AttributeChanged:Connect(onGenStateChanged)
+    if genInstance.Parent and (genInstance.Parent:IsA("Model") or genInstance.Parent:IsA("Folder")) then
+        genInstance.Parent.AttributeChanged:Connect(onGenStateChanged)
+    end
+
+    for _, desc in ipairs(genInstance:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") then
+            desc:GetPropertyChangedSignal("Enabled"):Connect(onGenStateChanged)
+        elseif desc:IsA("ValueBase") then
+            desc:GetPropertyChangedSignal("Value"):Connect(onGenStateChanged)
+        end
+    end
+
+    genInstance.DescendantAdded:Connect(function(desc)
+        if desc:IsA("ProximityPrompt") then
+            desc:GetPropertyChangedSignal("Enabled"):Connect(onGenStateChanged)
+            onGenStateChanged()
+        elseif desc:IsA("ValueBase") then
+            desc:GetPropertyChangedSignal("Value"):Connect(onGenStateChanged)
+            onGenStateChanged()
+        end
+    end)
 
     genInstance.AncestryChanged:Connect(function(_, parent)
         if not parent then
@@ -1156,7 +1314,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.2 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.3 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -3037,10 +3195,11 @@ ESPGroupBox:AddToggle("IncludeLocalPlayer", {
 
 ESPGroupBox:AddDivider()
 
--- Highlight Generators
+-- Highlight Generators (Un-Fixed Only)
 ESPGroupBox:AddToggle("HighlightGenerators", {
     Text = "Highlight Generator",
     Default = false,
+    Tooltip = "Highlights un-fixed generators. Automatically removes highlight as soon as a generator is fixed/completed.",
     Callback = function()
         scanGenerators()
         updateAllGeneratorHighlights()
@@ -3525,7 +3684,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.2)",
+                        Title = "Auto Parry (VD 2.9.3)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3533,7 +3692,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.2)",
+                        Title = "Auto Parry (VD 2.9.3)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3759,6 +3918,11 @@ task.spawn(function()
         pcall(function()
             if Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value then
                 updateAllPlayerHighlights()
+            end
+
+            -- Live generator check: un-fixed only, auto-remove completed highlights
+            if Toggles.HighlightGenerators and Toggles.HighlightGenerators.Value then
+                updateAllGeneratorHighlights()
             end
 
             -- Ensure combat listeners are always active on all players
@@ -4046,8 +4210,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.2 Loaded Successfully!",
+        Description = "VD 2.9.3 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.2 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.3 Loaded Successfully! Enjoy!")
 end)

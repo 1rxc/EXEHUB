@@ -1,6 +1,6 @@
--- Violence District | EXE HUB Script VD 2.9.8a (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9a (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
--- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
+-- Tabs: ESP | Automatic | Player | Camera | Parry | Server | Optimize | Settings
 
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local function safeLoad(path)
@@ -45,6 +45,8 @@ local VirtualUser = game:GetService("VirtualUser")
 local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 
 local Options = Library.Options
@@ -73,7 +75,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.8a",
+    Footer = "VD 2.9a",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -235,6 +237,7 @@ local Tabs = {
     Player = Window:AddTab("Player"),
     Camera = Window:AddTab("Camera"),
     Parry = Window:AddTab("Parry"),
+    Server = Window:AddTab("Server"),
     Optimize = Window:AddTab("Optimize"),
     ["UI Settings"] = Window:AddTab("Settings"),
 }
@@ -623,6 +626,17 @@ local LiveUIGroupBox = Tabs.Parry:AddGroupbox({
 local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
     Side = "Right",
     Name = "Auto Parry (Parrying Dagger)",
+})
+
+-- Inside Server Tab: Quick Hop (Left) and Server Browser (Right)
+local ServerQuickGroupBox = Tabs.Server:AddGroupbox({
+    Side = "Left",
+    Name = "Quick Server Hop",
+})
+
+local ServerBrowserGroupBox = Tabs.Server:AddGroupbox({
+    Side = "Right",
+    Name = "Server Browser (0-1 Players)",
 })
 
 -- Inside Optimize Tab: Ping & MS Booster (Left) and Network Status (Right)
@@ -1321,7 +1335,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.8a - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.a - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -3691,7 +3705,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.8a)",
+                        Title = "Auto Parry (VD 2.9a)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3699,7 +3713,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.8a)",
+                        Title = "Auto Parry (VD 2.9a)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3744,6 +3758,275 @@ AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
         return
     end
     executeParry("MANUAL_TEST")
+end)
+
+----------------------------------------------------------------------
+-- UI ELEMENTS (SERVER TAB - SERVER LIST & HOPPER)
+----------------------------------------------------------------------
+
+local cachedServerList = {}
+local isScanningServers = false
+local serverStatusLabel = nil
+
+local function safeHttpGet(url)
+    local s, res = pcall(game.HttpGet, game, url)
+    if s and res and #res > 20 then return res end
+
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if req then
+        local s2, res2 = pcall(req, { Url = url, Method = "GET" })
+        if s2 and res2 and res2.Body and #res2.Body > 20 then
+            return res2.Body
+        end
+    end
+    return nil
+end
+
+local function teleportToServer(jobId)
+    if not jobId or jobId == "" then return end
+    pcall(function()
+        Library:Notify({
+            Title = "Server Hop",
+            Description = "Teleporting to server (" .. jobId:sub(1, 8) .. "...)",
+            Time = 5,
+        })
+    end)
+
+    task.spawn(function()
+        local s, _ = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+        end)
+        if not s then
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+        end
+    end)
+end
+
+local function scanLowPlayerServers(callback)
+    if isScanningServers then return end
+    isScanningServers = true
+
+    task.spawn(function()
+        pcall(function()
+            if serverStatusLabel then
+                serverStatusLabel:SetText("Status: Scanning Roblox public servers...")
+            end
+        end)
+
+        local placeId = game.PlaceId
+        local currentJob = game.JobId
+        local found = {}
+        local cursor = ""
+        local maxPages = 4
+        local page = 0
+
+        while page < maxPages do
+            page = page + 1
+            local url = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100"
+            if cursor ~= "" then
+                url = url .. "&cursor=" .. cursor
+            end
+
+            local raw = safeHttpGet(url)
+            if not raw then break end
+
+            local ok, json = pcall(HttpService.JSONDecode, HttpService, raw)
+            if not ok or not json or not json.data then break end
+
+            for _, srv in ipairs(json.data) do
+                local sId = tostring(srv.id or "")
+                local playing = tonumber(srv.playing) or 0
+                local maxP = tonumber(srv.maxPlayers) or 0
+                local ping = tonumber(srv.ping) or 0
+
+                if sId ~= "" and sId ~= currentJob and playing < maxP then
+                    table.insert(found, {
+                        id = sId,
+                        playing = playing,
+                        maxPlayers = maxP,
+                        ping = ping,
+                        display = "[" .. tostring(playing) .. "/" .. tostring(maxP) .. "] Ping: " .. tostring(ping) .. "ms (" .. sId:sub(1, 8) .. "...)"
+                    })
+                end
+            end
+
+            if json.nextPageCursor and tostring(json.nextPageCursor) ~= "null" and tostring(json.nextPageCursor) ~= "" then
+                cursor = tostring(json.nextPageCursor)
+            else
+                break
+            end
+        end
+
+        -- Sort ascending by players so 0 and 1 player servers are always first
+        table.sort(found, function(a, b)
+            if a.playing == b.playing then
+                return a.ping < b.ping
+            end
+            return a.playing < b.playing
+        end)
+
+        cachedServerList = found
+        isScanningServers = false
+
+        if callback then
+            callback(found)
+        end
+    end)
+end
+
+-- Left Side: Quick Server Hop Controls
+ServerQuickGroupBox:AddButton("Hop to Empty / Lowest Server (0-1 Players)", function()
+    pcall(function()
+        Library:Notify({
+            Title = "Server Hop",
+            Description = "Searching for empty or 1-player server...",
+            Time = 4,
+        })
+    end)
+
+    scanLowPlayerServers(function(servers)
+        if #servers == 0 then
+            pcall(function()
+                Library:Notify({
+                    Title = "Server Hop",
+                    Description = "No other public servers found. Try refreshing!",
+                    Time = 5,
+                })
+            end)
+            return
+        end
+
+        -- Pick the lowest player count server (first entry is lowest due to sort)
+        local target = servers[1]
+        teleportToServer(target.id)
+    end)
+end)
+
+ServerQuickGroupBox:AddDivider()
+
+ServerQuickGroupBox:AddButton("Random Server Hop", function()
+    pcall(function()
+        Library:Notify({
+            Title = "Server Hop",
+            Description = "Finding random public server...",
+            Time = 4,
+        })
+    end)
+
+    scanLowPlayerServers(function(servers)
+        if #servers == 0 then
+            pcall(function()
+                TeleportService:Teleport(game.PlaceId, LocalPlayer)
+            end)
+            return
+        end
+
+        local rnd = servers[math.random(1, #servers)]
+        teleportToServer(rnd.id)
+    end)
+end)
+
+ServerQuickGroupBox:AddButton("Rejoin Current Server", function()
+    teleportToServer(game.JobId)
+end)
+
+ServerQuickGroupBox:AddDivider()
+
+ServerQuickGroupBox:AddLabel("Current Place ID: " .. tostring(game.PlaceId))
+local currentJobLabel = ServerQuickGroupBox:AddLabel("Current Job: " .. tostring(game.JobId):sub(1, 10) .. "...")
+local currentPlayersLabel = ServerQuickGroupBox:AddLabel("Current Players: " .. tostring(#Players:GetPlayers()))
+
+-- Right Side: Server Browser & 0-1 Player Selector
+serverStatusLabel = ServerBrowserGroupBox:AddLabel("Status: Click Refresh to Scan")
+
+local ServerDropdown = ServerBrowserGroupBox:AddDropdown("SelectedServer", {
+    Values = { "None - Click Refresh Below" },
+    Default = "None - Click Refresh Below",
+    Multi = false,
+    Text = "Available Servers",
+    Tooltip = "Select any server from the scanned list to teleport.",
+})
+
+ServerBrowserGroupBox:AddButton("Refresh Server List (Find 0-1 Players)", function()
+    scanLowPlayerServers(function(servers)
+        if #servers == 0 then
+            pcall(function()
+                ServerDropdown:SetValues({ "No other servers found" })
+                ServerDropdown:SetValue("No other servers found")
+                serverStatusLabel:SetText("Status: No other public servers found.")
+            end)
+            return
+        end
+
+        local displayList = {}
+        local emptyOrOneCount = 0
+        for _, srv in ipairs(servers) do
+            table.insert(displayList, srv.display)
+            if srv.playing <= 1 then
+                emptyOrOneCount = emptyOrOneCount + 1
+            end
+        end
+
+        pcall(function()
+            ServerDropdown:SetValues(displayList)
+            ServerDropdown:SetValue(displayList[1])
+            serverStatusLabel:SetText("Found " .. tostring(#servers) .. " servers (" .. tostring(emptyOrOneCount) .. " with 0-1 players)")
+            Library:Notify({
+                Title = "Server List Refreshed",
+                Description = "Found " .. tostring(#servers) .. " servers (" .. tostring(emptyOrOneCount) .. " with 0-1 players).",
+                Time = 4,
+            })
+        end)
+    end)
+end)
+
+ServerBrowserGroupBox:AddButton("Join Selected Server", function()
+    local sel = Options.SelectedServer and Options.SelectedServer.Value
+    if not sel or sel:find("None") or sel:find("No other") then
+        pcall(function()
+            Library:Notify({
+                Title = "Server Hop",
+                Description = "Please click 'Refresh Server List' and select a server first!",
+                Time = 4,
+            })
+        end)
+        return
+    end
+
+    for _, srv in ipairs(cachedServerList) do
+        if srv.display == sel then
+            teleportToServer(srv.id)
+            return
+        end
+    end
+
+    -- Fallback: extract JobId prefix from display string
+    local sIdSub = sel:match("%((%w+)%.%.%.%)")
+    if sIdSub then
+        for _, srv in ipairs(cachedServerList) do
+            if srv.id:find(sIdSub) then
+                teleportToServer(srv.id)
+                return
+            end
+        end
+    end
+end)
+
+ServerBrowserGroupBox:AddDivider()
+
+ServerBrowserGroupBox:AddButton("Copy Current JobId", function()
+    pcall(function()
+        if setclipboard then
+            setclipboard(tostring(game.JobId))
+            Library:Notify({
+                Title = "JobId Copied",
+                Description = "Current server JobId copied to clipboard!",
+                Time = 3,
+            })
+        end
+    end)
 end)
 
 ----------------------------------------------------------------------
@@ -4221,8 +4504,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.8a Loaded Successfully!",
+        Description = "VD 2.9a Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.8a Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9a Loaded Successfully! Enjoy!")
 end)

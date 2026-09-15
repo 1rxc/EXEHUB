@@ -1709,13 +1709,15 @@ pcall(function()
     if hookmetamethod then
         local oldNamecall
         oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-            local method = getnamecallmethod()
-            if (method == "FireServer" or method == "fireServer") and Toggles.AntiStun and Toggles.AntiStun.Value then
-                local name = tostring(self.Name):lower()
-                -- NEVER block drop, pallet, interact, repair, or normal player actions
-                if not (name:find("drop") or name:find("pallet") or name:find("interact") or name:find("action") or name:find("repair")) then
-                    if name:find("stun") or name:find("blind") then
-                        return nil
+            if not checkcaller() then
+                local method = getnamecallmethod()
+                if (method == "FireServer" or method == "fireServer") and Toggles.AntiStun and Toggles.AntiStun.Value then
+                    local name = tostring(self.Name):lower()
+                    -- NEVER block drop, pallet, interact, repair, or normal player actions
+                    if not (name:find("drop") or name:find("pallet") or name:find("interact") or name:find("action") or name:find("repair")) then
+                        if name:find("stun") or name:find("blind") then
+                            return nil
+                        end
                     end
                 end
             end
@@ -2643,84 +2645,100 @@ local function isTwistOfFateObject(inst)
 end
 
 local function getTwistOfFate()
-    local char = LocalPlayer.Character
-    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+    local resultTool, isEquipped = nil, false
+    pcall(function()
+        local char = LocalPlayer.Character
+        local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
 
-    -- 1. Character Tool (Equipped)
-    if char then
-        for _, child in ipairs(char:GetChildren()) do
-            if child:IsA("Tool") and isTwistOfFateObject(child) then
-                return child, true
+        -- 1. Character Tool (Equipped)
+        if char then
+            for _, child in ipairs(char:GetChildren()) do
+                if child:IsA("Tool") and isTwistOfFateObject(child) then
+                    resultTool = child
+                    isEquipped = true
+                    return
+                end
             end
         end
-    end
 
-    -- 2. Backpack Tool (In inventory)
-    if bp then
-        for _, child in ipairs(bp:GetChildren()) do
-            if child:IsA("Tool") and isTwistOfFateObject(child) then
-                return child, false
+        -- 2. Backpack Tool (In inventory)
+        if bp then
+            for _, child in ipairs(bp:GetChildren()) do
+                if child:IsA("Tool") and isTwistOfFateObject(child) then
+                    resultTool = child
+                    isEquipped = false
+                    return
+                end
             end
         end
-    end
 
-    -- 3. Character Tool or Model (Equipped)
-    if char then
-        for _, child in ipairs(char:GetChildren()) do
-            if (child:IsA("Tool") or child:IsA("Model")) and isTwistOfFateObject(child) then
-                return child, true
+        -- 3. Character Tool or Model (Equipped)
+        if char then
+            for _, child in ipairs(char:GetChildren()) do
+                if (child:IsA("Tool") or child:IsA("Model")) and isTwistOfFateObject(child) then
+                    resultTool = child
+                    isEquipped = true
+                    return
+                end
             end
         end
-    end
-
-    return nil, false
+    end)
+    return resultTool, isEquipped
 end
 
 local function getActiveKiller()
-    -- 1. Check all players for verified killer
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and isKiller(player) then
-            local char = player.Character
-            if char then
-                local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-                if root then
-                    return player, char
+    local resPlayer, resChar = nil, nil
+    pcall(function()
+        -- 1. Check all players for verified killer
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and isKiller(player) then
+                local char = player.Character
+                if char then
+                    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+                    if root then
+                        resPlayer = player
+                        resChar = char
+                        return
+                    end
                 end
             end
         end
-    end
 
-    -- 2. Check tags or attributes
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local char = player.Character
-            if (char:GetAttribute("IsKiller") == true or char:GetAttribute("Killer") == true or CollectionService:HasTag(char, "Killer")) then
-                local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
-                if root then
-                    return player, char
+        -- 2. Check tags or attributes
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local char = player.Character
+                if (char:GetAttribute("IsKiller") == true or char:GetAttribute("Killer") == true or CollectionService:HasTag(char, "Killer")) then
+                    local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+                    if root then
+                        resPlayer = player
+                        resChar = char
+                        return
+                    end
                 end
             end
         end
-    end
 
-    -- 3. Check for killer weapons
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local char = player.Character
-            for _, item in ipairs(char:GetChildren()) do
-                if item:IsA("Tool") then
-                    local n = item.Name:lower()
-                    for _, wep in ipairs(KnownKillerWeapons) do
-                        if n:find(wep.key) then
-                            return player, char
+        -- 3. Check for killer weapons
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                local char = player.Character
+                for _, item in ipairs(char:GetChildren()) do
+                    if item:IsA("Tool") then
+                        local n = tostring(item.Name):lower()
+                        for _, wep in ipairs(KnownKillerWeapons) do
+                            if n:find(wep.key) then
+                                resPlayer = player
+                                resChar = char
+                                return
+                            end
                         end
                     end
                 end
             end
         end
-    end
-
-    return nil, nil
+    end)
+    return resPlayer, resChar
 end
 
 -- 100% Hit Chance & Aim To Killer: Driven by frame-rate independent camera tracking & character alignment (zero metatable hook, zero stack recursion)
@@ -3220,73 +3238,74 @@ end)
 -- Twist of Fate Aim Lock Render Loop (100% Smooth Aim to Killer)
 connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
     if not (Toggles.AimToKiller and Toggles.AimToKiller.Value) then return end
+    pcall(function()
+        local gun, isEq = getTwistOfFate()
+        if not isEq then return end
 
-    local gun, isEq = getTwistOfFate()
-    if not isEq then return end
+        local _, killerChar = getActiveKiller()
+        if not killerChar then return end
 
-    local _, killerChar = getActiveKiller()
-    if not killerChar then return end
+        local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
+            and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
+            or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
 
-    local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
-        and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
-        or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
+        if not targetPart then return end
 
-    if not targetPart then return end
+        local lockMode = Options.AimLockMode and Options.AimLockMode.Value or "When Aiming / Firing"
+        local shouldAim = false
 
-    local lockMode = Options.AimLockMode and Options.AimLockMode.Value or "When Aiming / Firing"
-    local shouldAim = false
-
-    if lockMode == "Always When Equipped" then
-        shouldAim = true
-    else
-        local isRmb, isLmb = false, false
-        pcall(function()
-            isRmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-            isLmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-        end)
-        if isRmb or isLmb then
+        if lockMode == "Always When Equipped" then
             shouldAim = true
         else
-            local myChar = LocalPlayer.Character
-            if myChar then
-                if myChar:GetAttribute("Aiming") == true
-                    or myChar:GetAttribute("IsAiming") == true
-                    or myChar:GetAttribute("Aim") == true
-                    or myChar:GetAttribute("Shooting") == true then
-                    shouldAim = true
+            local isRmb, isLmb = false, false
+            pcall(function()
+                isRmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+                isLmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+            end)
+            if isRmb or isLmb then
+                shouldAim = true
+            else
+                local myChar = LocalPlayer.Character
+                if myChar then
+                    if myChar:GetAttribute("Aiming") == true
+                        or myChar:GetAttribute("IsAiming") == true
+                        or myChar:GetAttribute("Aim") == true
+                        or myChar:GetAttribute("Shooting") == true then
+                        shouldAim = true
+                    end
                 end
             end
         end
-    end
 
-    if shouldAim then
-        local cam = Workspace.CurrentCamera
-        if cam then
-            local camPos = cam.CFrame.Position
-            local targetPos = targetPart.Position
-            local targetLook = CFrame.new(camPos, targetPos)
+        if shouldAim then
+            local cam = Workspace.CurrentCamera
+            if cam then
+                local camPos = cam.CFrame.Position
+                local targetPos = targetPart.Position
+                local targetLook = CFrame.new(camPos, targetPos)
 
-            local isSmooth = not (Toggles.SmoothAim and Toggles.SmoothAim.Value == false)
-            if isSmooth then
-                local speed = Options.AimSmoothSpeed and Options.AimSmoothSpeed.Value or 18
-                local alpha = math.clamp((dt or 0.016) * speed, 0.08, 0.95)
-                cam.CFrame = cam.CFrame:Lerp(targetLook, alpha)
-            else
-                cam.CFrame = targetLook
+                local isSmooth = not (Toggles.SmoothAim and Toggles.SmoothAim.Value == false)
+                if isSmooth then
+                    local speed = Options.AimSmoothSpeed and Options.AimSmoothSpeed.Value or 18
+                    local alpha = math.clamp((dt or 0.016) * speed, 0.08, 0.95)
+                    cam.CFrame = cam.CFrame:Lerp(targetLook, alpha)
+                else
+                    cam.CFrame = targetLook
+                end
+            end
+
+            local myChar = LocalPlayer.Character
+            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            if myRoot then
+                local flatTarget = Vector3.new(targetPart.Position.X, myRoot.Position.Y, targetPart.Position.Z)
+                if (flatTarget - myRoot.Position).Magnitude > 0.5 then
+                    local charTargetRot = CFrame.new(myRoot.Position, flatTarget)
+                    local alphaChar = math.clamp((dt or 0.016) * 14, 0.08, 0.9)
+                    myRoot.CFrame = myRoot.CFrame:Lerp(charTargetRot, alphaChar)
+                end
             end
         end
-
-        local myChar = LocalPlayer.Character
-        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-        if myRoot then
-            local flatTarget = Vector3.new(targetPart.Position.X, myRoot.Position.Y, targetPart.Position.Z)
-            if (flatTarget - myRoot.Position).Magnitude > 0.5 then
-                local charTargetRot = CFrame.new(myRoot.Position, flatTarget)
-                local alphaChar = math.clamp((dt or 0.016) * 14, 0.08, 0.9)
-                myRoot.CFrame = myRoot.CFrame:Lerp(charTargetRot, alphaChar)
-            end
-        end
-    end
+    end)
 end)
 
 -- Speed Adjust & Fly Render Loop

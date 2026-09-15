@@ -1,6 +1,6 @@
--- Violence District | EXE HUB Script VD 2.9.5 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.6 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
--- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
+-- Tabs: ESP | Automatic | Player | Camera | Parry | Vault | Optimize | Settings
 
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local function safeLoad(path)
@@ -45,6 +45,7 @@ local VirtualUser = game:GetService("VirtualUser")
 local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 local LocalPlayer = Players.LocalPlayer
 
 local Options = Library.Options
@@ -73,7 +74,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.5",
+    Footer = "VD 2.9.6",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -235,6 +236,7 @@ local Tabs = {
     Player = Window:AddTab("Player"),
     Camera = Window:AddTab("Camera"),
     Parry = Window:AddTab("Parry"),
+    Vault = Window:AddTab("Vault"),
     Optimize = Window:AddTab("Optimize"),
     ["UI Settings"] = Window:AddTab("Settings"),
 }
@@ -625,6 +627,17 @@ local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
     Name = "Auto Parry (Parrying Dagger)",
 })
 
+-- Inside Vault Tab: Fast Vault & Mechanics (Left) and Pallet & Obstacle Settings (Right)
+local VaultMainGroupBox = Tabs.Vault:AddGroupbox({
+    Side = "Left",
+    Name = "Fast Vault Mechanics",
+})
+
+local VaultPalletGroupBox = Tabs.Vault:AddGroupbox({
+    Side = "Right",
+    Name = "Pallet & Obstacle Settings",
+})
+
 -- Inside Optimize Tab: Ping & MS Booster (Left) and Network Status (Right)
 local OptimizeGroupBox = Tabs.Optimize:AddGroupbox({
     Side = "Left",
@@ -826,6 +839,169 @@ local function bindLocalCharacterAntiStun(char)
     end)
 end
 
+----------------------------------------------------------------------
+-- VAULT & PALLET SYSTEM (VD 2.9.6 - FAST VAULT & PALLET MECHANICS)
+----------------------------------------------------------------------
+
+local VaultKeywords = {
+    "vault", "vaulting", "fastvault", "slowvault", "medvault", "mediumvault",
+    "palletvault", "windowvault", "pallet_vault", "window_vault", "pallet_slide",
+    "slide", "hurdle", "mantle", "hopover", "jumpover", "climbover", "climb_over",
+    "obstacle_vault", "obstacle"
+}
+
+local PalletKeywords = {
+    "droppallet", "drop_pallet", "pulldown", "pull_down", "palletdrop", "pallet_drop"
+}
+
+local function isVaultAnimation(track)
+    if not track then return false end
+    local tName = (track.Name or ""):lower()
+    local animId = ""
+    if track.Animation then
+        animId = tostring(track.Animation.AnimationId or ""):lower()
+        tName = tName .. " " .. (track.Animation.Name or ""):lower()
+    end
+    for _, kw in ipairs(VaultKeywords) do
+        if tName:find(kw) or animId:find(kw) then
+            return true
+        end
+    end
+    return false
+end
+
+local function isPalletDropAnimation(track)
+    if not track then return false end
+    local tName = (track.Name or ""):lower()
+    local animId = ""
+    if track.Animation then
+        animId = tostring(track.Animation.AnimationId or ""):lower()
+        tName = tName .. " " .. (track.Animation.Name or ""):lower()
+    end
+    for _, kw in ipairs(PalletKeywords) do
+        if tName:find(kw) or animId:find(kw) then
+            return true
+        end
+    end
+    return false
+end
+
+local function isVaultPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return false end
+    local text = (tostring(prompt.ActionText or "") .. " " .. tostring(prompt.ObjectText or "") .. " " .. tostring(prompt.Name or "")):lower()
+    return text:find("vault")
+        or text:find("pallet")
+        or text:find("slide")
+        or text:find("hurdle")
+        or text:find("hop")
+        or text:find("climb")
+        or text:find("window")
+end
+
+local originalPromptProps = {}
+
+local function optimizeVaultPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    if not isVaultPrompt(prompt) then return end
+
+    if not originalPromptProps[prompt] then
+        originalPromptProps[prompt] = {
+            HoldDuration = prompt.HoldDuration,
+            MaxActivationDistance = prompt.MaxActivationDistance,
+            RequiresLineOfSight = prompt.RequiresLineOfSight
+        }
+    end
+
+    if Toggles.FastVault and Toggles.FastVault.Value then
+        if Toggles.InstantVaultPrompt and Toggles.InstantVaultPrompt.Value then
+            prompt.HoldDuration = 0
+        end
+        if Toggles.ExtendVaultRange and Toggles.ExtendVaultRange.Value then
+            local dist = (Options.VaultReachDistance and Options.VaultReachDistance.Value) or 15
+            prompt.MaxActivationDistance = math.max(prompt.MaxActivationDistance, dist)
+        end
+        prompt.RequiresLineOfSight = false
+    else
+        local orig = originalPromptProps[prompt]
+        if orig then
+            prompt.HoldDuration = orig.HoldDuration
+            prompt.MaxActivationDistance = orig.MaxActivationDistance
+            prompt.RequiresLineOfSight = orig.RequiresLineOfSight
+        end
+    end
+end
+
+local function updateAllVaultPrompts()
+    for _, desc in ipairs(Workspace:GetDescendants()) do
+        if desc:IsA("ProximityPrompt") and isVaultPrompt(desc) then
+            optimizeVaultPrompt(desc)
+        end
+    end
+end
+
+local function bindLocalCharacterVault(char)
+    if not char then return end
+    task.spawn(function()
+        local hum = char:WaitForChild("Humanoid", 4)
+        local root = char:WaitForChild("HumanoidRootPart", 4)
+        if not hum then return end
+
+        local animator = hum:WaitForChild("Animator", 4)
+        if animator then
+            animator.AnimationPlayed:Connect(function(track)
+                if not (Toggles.FastVault and Toggles.FastVault.Value) then return end
+
+                if isVaultAnimation(track) then
+                    local isPallet = (track.Name or ""):lower():find("pallet") or (track.Animation and (track.Animation.Name or ""):lower():find("pallet"))
+                    if isPallet and Toggles.FastPalletVault and not Toggles.FastPalletVault.Value then
+                        return
+                    end
+
+                    local mult = (Options.VaultSpeedMultiplier and Options.VaultSpeedMultiplier.Value) or 2.5
+                    pcall(function()
+                        track:AdjustSpeed(mult)
+                    end)
+
+                    if Toggles.VaultForwardBoost and Toggles.VaultForwardBoost.Value and root then
+                        task.spawn(function()
+                            local boostSpeed = (Options.VaultBoostSpeed and Options.VaultBoostSpeed.Value) or 32
+                            local look = root.CFrame.LookVector
+                            local t0 = tick()
+                            while track.IsPlaying and (tick() - t0 < 1.0) do
+                                if not (Toggles.FastVault and Toggles.FastVault.Value) then break end
+                                pcall(function()
+                                    track:AdjustSpeed(mult)
+                                    local vy = root.AssemblyLinearVelocity.Y
+                                    root.AssemblyLinearVelocity = Vector3.new(look.X * boostSpeed, vy, look.Z * boostSpeed)
+                                    if hum and hum.WalkSpeed < defaultSpeed then
+                                        hum.WalkSpeed = defaultSpeed
+                                    end
+                                end)
+                                RunService.Heartbeat:Wait()
+                            end
+
+                            if Toggles.NoVaultSlowdown and Toggles.NoVaultSlowdown.Value and hum then
+                                pcall(function()
+                                    hum.PlatformStand = false
+                                    if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
+                                        if applyPlayerSpeed then applyPlayerSpeed() end
+                                    else
+                                        hum.WalkSpeed = defaultSpeed
+                                    end
+                                end)
+                            end
+                        end)
+                    end
+                elseif isPalletDropAnimation(track) and Toggles.FastPalletDrop and Toggles.FastPalletDrop.Value then
+                    pcall(function()
+                        track:AdjustSpeed(2.5)
+                    end)
+                end
+            end)
+        end
+    end)
+end
+
 local function setupPlayer(player)
     connections[#connections + 1] = player.CharacterAdded:Connect(function(char)
         task.wait(0.2)
@@ -835,6 +1011,7 @@ local function setupPlayer(player)
         end
         if player == LocalPlayer then
             bindLocalCharacterAntiStun(char)
+            bindLocalCharacterVault(char)
             pcall(function()
                 local h = char:FindFirstChildOfClass("Humanoid")
                 if h and h.WalkSpeed > 0 and not (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value) then
@@ -870,6 +1047,7 @@ local function setupPlayer(player)
         end
         if player == LocalPlayer then
             bindLocalCharacterAntiStun(player.Character)
+            bindLocalCharacterVault(player.Character)
             pcall(function()
                 local h = player.Character:FindFirstChildOfClass("Humanoid")
                 if h and h.WalkSpeed > 0 and not (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value) then
@@ -1321,7 +1499,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.5 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.6 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -1343,6 +1521,11 @@ local function isProtectedActionAnim(name)
     end
     return name:find("drop")
         or name:find("vault")
+        or name:find("pallet")
+        or name:find("slide")
+        or name:find("hurdle")
+        or name:find("climb")
+        or name:find("hop")
         or name:find("pull")
         or name:find("repair")
         or name:find("gen")
@@ -3691,7 +3874,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.5)",
+                        Title = "Auto Parry (VD 2.9.6)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3699,7 +3882,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.5)",
+                        Title = "Auto Parry (VD 2.9.6)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3745,6 +3928,119 @@ AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
     end
     executeParry("MANUAL_TEST")
 end)
+
+----------------------------------------------------------------------
+-- UI ELEMENTS (VAULT TAB)
+----------------------------------------------------------------------
+
+-- Left Side: Fast Vault Mechanics
+VaultMainGroupBox:AddToggle("FastVault", {
+    Text = "Fast Vault (All Obstacles)",
+    Default = false,
+    Tooltip = "Accelerates all vault animations and propels you swiftly across windows, pallets, and low obstacles.",
+    Callback = function(val)
+        if val then
+            pcall(function()
+                Library:Notify({
+                    Title = "Vault System (VD 2.9.6)",
+                    Description = "Fast Vault Activated! Windows, pallets, and obstacles will vault at accelerated speed.",
+                    Time = 4,
+                })
+            end)
+        end
+        updateAllVaultPrompts()
+    end,
+})
+
+VaultMainGroupBox:AddSlider("VaultSpeedMultiplier", {
+    Text = "Vault Speed Multiplier",
+    Default = 2.5,
+    Min = 1.2,
+    Max = 5.0,
+    Rounding = 1,
+    Compact = false,
+    Tooltip = "Playback speed for vault animations (2.5x makes vaults instant and ultra-fast).",
+})
+
+VaultMainGroupBox:AddDivider()
+
+VaultMainGroupBox:AddToggle("VaultForwardBoost", {
+    Text = "Forward Momentum Boost",
+    Default = true,
+    Tooltip = "Applies smooth forward velocity while vaulting to prevent clipping or getting stuck on obstacles.",
+})
+
+VaultMainGroupBox:AddSlider("VaultBoostSpeed", {
+    Text = "Boost Velocity",
+    Default = 32,
+    Min = 16,
+    Max = 60,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = "Velocity speed applied during vault traversal.",
+})
+
+VaultMainGroupBox:AddDivider()
+
+VaultMainGroupBox:AddToggle("NoVaultSlowdown", {
+    Text = "No Vault Slowdown",
+    Default = true,
+    Tooltip = "Prevents landing fatigue or post-vault walkspeed reduction, allowing instant sprint continuation.",
+})
+
+-- Right Side: Pallet & Obstacle Settings
+VaultPalletGroupBox:AddToggle("FastPalletVault", {
+    Text = "Fast Pallet Vault",
+    Default = true,
+    Tooltip = "Specifically accelerates sliding and vaulting over dropped pallets.",
+})
+
+VaultPalletGroupBox:AddToggle("FastPalletDrop", {
+    Text = "Fast Pallet Drop / Pull",
+    Default = true,
+    Tooltip = "Accelerates pallet pull-down animations so killers cannot hit you mid-drop.",
+})
+
+VaultPalletGroupBox:AddDivider()
+
+VaultPalletGroupBox:AddToggle("InstantVaultPrompt", {
+    Text = "Instant Vault Prompt (0s Hold)",
+    Default = true,
+    Tooltip = "Removes hold duration on all vault and pallet interaction prompts for instant 1-tap activation.",
+    Callback = function()
+        updateAllVaultPrompts()
+    end,
+})
+
+VaultPalletGroupBox:AddToggle("ExtendVaultRange", {
+    Text = "Extended Vault Reach",
+    Default = true,
+    Tooltip = "Increases interaction distance for vault prompts so you can initiate vaults earlier while sprinting.",
+    Callback = function()
+        updateAllVaultPrompts()
+    end,
+})
+
+VaultPalletGroupBox:AddSlider("VaultReachDistance", {
+    Text = "Vault Activation Distance",
+    Default = 15,
+    Min = 8,
+    Max = 25,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = "Maximum reach distance (studs) to trigger vault prompts.",
+    Callback = function()
+        updateAllVaultPrompts()
+    end,
+})
+
+VaultPalletGroupBox:AddDivider()
+
+VaultPalletGroupBox:AddToggle("AutoVaultAssist", {
+    Text = "Auto Jump-Vault Assist",
+    Default = false,
+    Tooltip = "When holding or pressing Space near any vaultable obstacle, automatically triggers the vault prompt.",
+})
 
 ----------------------------------------------------------------------
 -- UI ELEMENTS (OPTIMIZE TAB)
@@ -3907,6 +4203,86 @@ connections[#connections + 1] = Players.PlayerRemoving:Connect(function(player)
         playerHighlights[player] = nil
     end
 end)
+
+-- Continuous Vault Speed Heartbeat & Active Animation Enforcement
+connections[#connections + 1] = RunService.Heartbeat:Connect(function()
+    if Toggles.FastVault and Toggles.FastVault.Value and LocalPlayer.Character then
+        local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        local animator = hum and hum:FindFirstChildOfClass("Animator")
+        if animator then
+            local mult = (Options.VaultSpeedMultiplier and Options.VaultSpeedMultiplier.Value) or 2.5
+            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                if isVaultAnimation(track) then
+                    local isPallet = (track.Name or ""):lower():find("pallet") or (track.Animation and (track.Animation.Name or ""):lower():find("pallet"))
+                    if not (isPallet and Toggles.FastPalletVault and not Toggles.FastPalletVault.Value) then
+                        if track.Speed ~= mult then
+                            pcall(function() track:AdjustSpeed(mult) end)
+                        end
+                    end
+                elseif isPalletDropAnimation(track) and Toggles.FastPalletDrop and Toggles.FastPalletDrop.Value then
+                    if track.Speed ~= 2.5 then
+                        pcall(function() track:AdjustSpeed(2.5) end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Proximity Prompt Hooking for Instant Vaults & Obstacles
+connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
+    if descendant:IsA("ProximityPrompt") and isVaultPrompt(descendant) then
+        optimizeVaultPrompt(descendant)
+    end
+end)
+
+pcall(function()
+    connections[#connections + 1] = ProximityPromptService.PromptShown:Connect(function(prompt)
+        if isVaultPrompt(prompt) then
+            optimizeVaultPrompt(prompt)
+        end
+    end)
+    connections[#connections + 1] = ProximityPromptService.PromptButtonHoldBegan:Connect(function(prompt, player)
+        if player == LocalPlayer and Toggles.FastVault and Toggles.FastVault.Value and isVaultPrompt(prompt) then
+            if Toggles.InstantVaultPrompt and Toggles.InstantVaultPrompt.Value then
+                pcall(function()
+                    if fireproximityprompt then
+                        fireproximityprompt(prompt, 0)
+                    end
+                end)
+            end
+        end
+    end)
+end)
+
+-- Jump-Vault Assist: Triggers nearby vault prompt when Space is pressed
+connections[#connections + 1] = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.Space then
+        if Toggles.FastVault and Toggles.FastVault.Value and Toggles.AutoVaultAssist and Toggles.AutoVaultAssist.Value then
+            pcall(function()
+                local char = LocalPlayer.Character
+                local root = char and char:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+                local maxDist = (Options.VaultReachDistance and Options.VaultReachDistance.Value) or 15
+                for _, prompt in ipairs(Workspace:GetDescendants()) do
+                    if prompt:IsA("ProximityPrompt") and prompt.Enabled and isVaultPrompt(prompt) then
+                        local part = prompt.Parent:IsA("BasePart") and prompt.Parent or prompt.Parent:FindFirstChildWhichIsA("BasePart")
+                        if part and (part.Position - root.Position).Magnitude <= maxDist then
+                            if fireproximityprompt then
+                                fireproximityprompt(prompt, 0)
+                                break
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end
+end)
+
+-- Initial scan for all existing vault prompts in map
+updateAllVaultPrompts()
 
 scanGenerators()
 
@@ -4215,8 +4591,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.5 Loaded Successfully!",
+        Description = "VD 2.9.6 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.5 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.6 Loaded Successfully! Enjoy!")
 end)

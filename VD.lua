@@ -1704,34 +1704,7 @@ local function cleanStunEffects(char)
     end
 end
 
--- 1. Hook and block ONLY stun remotes (NEVER block player actions like drop, pallet, or interact)
-pcall(function()
-    if hookmetamethod then
-        local oldNamecall
-        oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-            if not checkcaller() then
-                local method = getnamecallmethod()
-                if (method == "FireServer" or method == "fireServer") and Toggles.AntiStun and Toggles.AntiStun.Value then
-                    local name = tostring(self.Name):lower()
-                    -- NEVER block player actions, tool activations, or weapon shooting
-                    if name:find("drop") or name:find("pallet") or name:find("interact") or name:find("action") or name:find("repair")
-                        or name:find("shoot") or name:find("fire") or name:find("gun") or name:find("twist") or name:find("weapon") or name:find("attack") or name:find("killer") then
-                        return oldNamecall(self, ...)
-                    end
-                    local myChar = LocalPlayer.Character
-                    if myChar and (self:IsDescendantOf(myChar) or self:IsDescendantOf(LocalPlayer)) then
-                        return oldNamecall(self, ...)
-                    end
-                    if name:find("stun") or name:find("blind") then
-                        return nil
-                    end
-                end
-            end
-            return oldNamecall(self, ...)
-        end))
-    end
-end)
-
+-- 1. AntiStun Remote Protection (Direct remote hook & state recovery, zero global metamethod overhead)
 -- 2. Hook specific known remotes directly in ReplicatedStorage
 local function hookStunRemotes()
     pcall(function()

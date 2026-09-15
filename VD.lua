@@ -1738,7 +1738,7 @@ end
 
 task.defer(hookStunRemotes)
 
--- Game Stability Patch: Automatically patches missing 'Items' and silences broken Character Lookscript (Line 431)
+-- Game Stability Patch: Automatically patches missing 'Items', 'Results.Frame', and silences broken Character Lookscript (Line 431)
 local function checkAndFixLookscript(char)
     if not char then return end
     pcall(function()
@@ -1755,12 +1755,48 @@ local function patchKillerLoadoutItems(inst)
     if not inst then return end
     pcall(function()
         if inst.Name == "Browse_loadout_killer" or inst.Name == "Browse_loadout_survivor" then
-            if not inst:FindFirstChild("Items") then
+            local existing = inst:FindFirstChild("Items")
+            if not existing then
                 local dummy = Instance.new("Frame")
                 dummy.Name = "Items"
                 dummy.Visible = false
                 dummy.Size = UDim2.new(0, 0, 0, 0)
                 dummy.Parent = inst
+
+                local conn
+                conn = inst.ChildAdded:Connect(function(child)
+                    if child ~= dummy and child.Name == "Items" then
+                        if conn then conn:Disconnect() conn = nil end
+                        pcall(function() dummy:Destroy() end)
+                    end
+                end)
+            end
+        end
+    end)
+end
+
+local function patchResultsGui(inst)
+    if not inst then return end
+    pcall(function()
+        if not (Toggles.FixResultsGui and Toggles.FixResultsGui.Value == false) then
+            if inst.Name == "Results" and (inst:IsA("ScreenGui") or inst:IsA("GuiObject") or inst:IsA("Folder")) then
+                local existing = inst:FindFirstChild("Frame")
+                if not existing then
+                    local dummy = Instance.new("Frame")
+                    dummy.Name = "Frame"
+                    dummy.Visible = false
+                    dummy.Size = UDim2.new(0, 0, 0, 0)
+                    dummy.BackgroundTransparency = 1
+                    dummy.Parent = inst
+
+                    local conn
+                    conn = inst.ChildAdded:Connect(function(child)
+                        if child ~= dummy and child.Name == "Frame" then
+                            if conn then conn:Disconnect() conn = nil end
+                            pcall(function() dummy:Destroy() end)
+                        end
+                    end)
+                end
             end
         end
     end)
@@ -1771,11 +1807,25 @@ local function applyGameUiPatches()
         if LocalPlayer.Character then
             checkAndFixLookscript(LocalPlayer.Character)
         end
+        local starterGui = game:GetService("StarterGui")
+        if starterGui then
+            local sgResults = starterGui:FindFirstChild("Results")
+            if sgResults then
+                patchResultsGui(sgResults)
+            end
+        end
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then
             for _, desc in ipairs(pg:GetDescendants()) do
                 if desc.Name == "Browse_loadout_killer" or desc.Name == "Browse_loadout_survivor" then
                     patchKillerLoadoutItems(desc)
+                elseif desc.Name == "Results" then
+                    patchResultsGui(desc)
+                end
+            end
+            for _, child in ipairs(pg:GetChildren()) do
+                if child.Name == "Results" then
+                    patchResultsGui(child)
                 end
             end
         end
@@ -1788,18 +1838,33 @@ task.spawn(function()
         if LocalPlayer.Character then
             checkAndFixLookscript(LocalPlayer.Character)
         end
-        LocalPlayer.CharacterAdded:Connect(function(char)
-            task.wait(0.1)
-            checkAndFixLookscript(char)
-        end)
-        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
-        if pg then
-            pg.DescendantAdded:Connect(function(desc)
+
+        local function bindPg(pgInstance)
+            if not pgInstance then return end
+            pgInstance.DescendantAdded:Connect(function(desc)
                 if desc.Name == "Browse_loadout_killer" or desc.Name == "Browse_loadout_survivor" then
                     patchKillerLoadoutItems(desc)
+                elseif desc.Name == "Results" then
+                    patchResultsGui(desc)
+                end
+            end)
+            pgInstance.ChildAdded:Connect(function(child)
+                if child.Name == "Results" then
+                    patchResultsGui(child)
                 end
             end)
         end
+
+        LocalPlayer.CharacterAdded:Connect(function(char)
+            task.wait(0.1)
+            checkAndFixLookscript(char)
+            applyGameUiPatches()
+            local currentPg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            bindPg(currentPg)
+        end)
+
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+        bindPg(pg)
     end)
 end)
 
@@ -4721,6 +4786,17 @@ OptimizeGroupBox:AddToggle("FixLookscript", {
     Callback = function(val)
         if val and LocalPlayer.Character then
             checkAndFixLookscript(LocalPlayer.Character)
+        end
+    end,
+})
+
+OptimizeGroupBox:AddToggle("FixResultsGui", {
+    Text = "Fix Results GUI (AwardLog)",
+    Default = true,
+    Tooltip = "Automatically patches missing 'Results.Frame' to prevent game script 'AwardLog:257' from crashing.",
+    Callback = function(val)
+        if val then
+            applyGameUiPatches()
         end
     end,
 })

@@ -627,10 +627,10 @@ local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
     Name = "Auto Parry (Parrying Dagger)",
 })
 
--- Inside Vault Tab: Fast Vault & Rotate (Left) and Information (Right)
+-- Inside Vault Tab: Fast Vault (Left) and Information (Right)
 local VaultGroupBox = Tabs.Vault:AddGroupbox({
     Side = "Left",
-    Name = "Fast Vault (Pallet Slide)",
+    Name = "Fast Vault (Flowstate Effect)",
 })
 
 local VaultInfoGroupBox = Tabs.Vault:AddGroupbox({
@@ -840,7 +840,7 @@ local function bindLocalCharacterAntiStun(char)
 end
 
 ----------------------------------------------------------------------
--- FAST VAULT SYSTEM (VD 2.9.6 - FAST ROTATE & SLIDE TO ANOTHER SIDE)
+-- FAST VAULT SYSTEM (VD 2.9.6 - FLOWSTATE EFFECT: 50% - 70% QUICKER VAULT)
 ----------------------------------------------------------------------
 
 local VaultKeywords = {
@@ -848,12 +848,20 @@ local VaultKeywords = {
     "palletvault", "windowvault", "pallet_vault", "window_vault", "pallet_slide",
     "palletslide", "slide", "hurdle", "mantle", "hopover", "jumpover",
     "climbover", "climb_over", "obstacle_vault", "obstacle", "hop", "climb",
-    "pallet"
+    "pallet", "window", "flowstate"
 }
 
 local vaultStatusLabel = nil
-local isFastSliding = false
-local lastSlideExecutionTime = 0
+local lastVaultStartTime = 0
+
+local function getVaultSpeedMultiplier()
+    local pct = 60
+    if Options.VaultSpeedBoost and Options.VaultSpeedBoost.Value then
+        pct = Options.VaultSpeedBoost.Value
+    end
+    -- Clamped between 50% and 70% faster (multiplier 1.50x to 1.70x)
+    return 1 + (math.clamp(pct, 50, 70) / 100)
+end
 
 -- Detects if the in-game VAULT prompt is currently displayed on player screen
 local function isVaultPromptActive()
@@ -909,91 +917,74 @@ local function isVaultAnimation(track)
             return true
         end
     end
+    -- Detect non-looped action animation started while VAULT prompt is visible on screen
+    if isVaultPromptActive() and track.Looped == false then
+        local prio = track.Priority
+        if prio == Enum.AnimationPriority.Action 
+            or prio == Enum.AnimationPriority.Action2 
+            or prio == Enum.AnimationPriority.Action3 
+            or prio == Enum.AnimationPriority.Action4 then
+            return true
+        end
+    end
     return false
 end
 
--- Executes fast slide & rotation to the other side of the pallet or window
-local function executeFastVaultSlide()
-    if isFastSliding or (tick() - lastSlideExecutionTime < 0.4) then return end
-    local char = LocalPlayer.Character
-    if not char then return end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not root or not hum or hum.Health <= 0 then return end
+-- Accelerates the vault animation and traversal speed by 50% - 70% (like Flowstate perk)
+local function applyFastVaultFlowstate(track)
+    if not track then return end
+    local mult = getVaultSpeedMultiplier()
+    lastVaultStartTime = tick()
 
-    isFastSliding = true
-    lastSlideExecutionTime = tick()
+    pcall(function()
+        if vaultStatusLabel then
+            local pct = math.floor((mult - 1) * 100)
+            vaultStatusLabel:SetText("Status: Vaulting +" .. tostring(pct) .. "% Quicker!")
+        end
+    end)
 
+    -- 1. Accelerate the animation track playback speed
+    pcall(function()
+        track:AdjustSpeed(mult)
+    end)
+
+    -- 2. Scale forward traversal momentum by the same 50% - 70% factor
     task.spawn(function()
-        pcall(function()
-            if vaultStatusLabel then
-                vaultStatusLabel:SetText("Status: Rotating to Other Side...")
-            end
-        end)
+        local char = LocalPlayer.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not root or not hum then return end
 
         local forwardDir = root.CFrame.LookVector
         local flatForward = Vector3.new(forwardDir.X, 0, forwardDir.Z).Unit
-        local slideDist = (Options.VaultSlideDistance and Options.VaultSlideDistance.Value) or 7.5
-        local shouldRotate180 = not (Toggles.VaultFaceForward and Toggles.VaultFaceForward.Value)
+        local normalVaultSpeed = 16
+        local boostedSpeed = normalVaultSpeed * mult
 
-        local startCF = root.CFrame
-        local targetPos = startCF.Position + (flatForward * slideDist)
-
-        -- Target CFrame: if rotating to other side (180°), face back towards the pallet
-        local targetCF
-        if shouldRotate180 then
-            targetCF = CFrame.new(targetPos, targetPos - flatForward)
-        else
-            targetCF = CFrame.new(targetPos, targetPos + flatForward)
+        while track.IsPlaying and (tick() - lastVaultStartTime < 1.0) do
+            if not (Toggles.FastVault and Toggles.FastVault.Value) then break end
+            pcall(function()
+                track:AdjustSpeed(mult)
+                local currentY = root.AssemblyLinearVelocity.Y
+                root.AssemblyLinearVelocity = Vector3.new(
+                    flatForward.X * boostedSpeed,
+                    currentY,
+                    flatForward.Z * boostedSpeed
+                )
+            end)
+            RunService.Heartbeat:Wait()
         end
 
-        -- Temporarily disable collision on character parts for 0.16s to glide cleanly through pallet/window
-        local partsCanCollide = {}
-        for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then
-                partsCanCollide[p] = p.CanCollide
-                p.CanCollide = false
-            end
-        end
-
-        -- Accelerate any playing animation tracks so animation matches the fast slide
-        local animator = hum:FindFirstChildOfClass("Animator")
-        if animator then
-            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                pcall(function() track:AdjustSpeed(4.0) end)
-            end
-        end
-
-        -- Smoothly glide and rotate to the other side over 0.16 seconds
-        local duration = 0.16
-        local t0 = tick()
-        while tick() - t0 < duration do
-            local alpha = math.clamp((tick() - t0) / duration, 0, 1)
-            local easeAlpha = alpha * alpha * (3 - 2 * alpha)
-            root.CFrame = startCF:Lerp(targetCF, easeAlpha)
-            root.AssemblyLinearVelocity = Vector3.zero
-            RunService.RenderStepped:Wait()
-        end
-
-        -- Ensure exact final position on the other side
-        root.CFrame = targetCF
-        root.AssemblyLinearVelocity = Vector3.zero
-
-        -- Restore original collision
-        for p, originalCollide in pairs(partsCanCollide) do
-            if p and p.Parent then
-                p.CanCollide = originalCollide
-            end
-        end
-
-        -- Immediate recovery: full sprint and no slowdown upon landing
-        hum.PlatformStand = false
-        hum.Sit = false
-        root.Anchored = false
-        if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
-            if applyPlayerSpeed then applyPlayerSpeed() end
-        else
-            hum.WalkSpeed = defaultSpeed
+        -- 3. Eliminate post-vault landing fatigue delay
+        if Toggles.NoVaultSlowdown and Toggles.NoVaultSlowdown.Value and hum then
+            pcall(function()
+                hum.PlatformStand = false
+                hum.Sit = false
+                if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
+                    if applyPlayerSpeed then applyPlayerSpeed() end
+                else
+                    hum.WalkSpeed = defaultSpeed
+                end
+            end)
         end
 
         pcall(function()
@@ -1001,9 +992,6 @@ local function executeFastVaultSlide()
                 vaultStatusLabel:SetText("Status: Ready")
             end
         end)
-
-        task.wait(0.15)
-        isFastSliding = false
     end)
 end
 
@@ -1018,8 +1006,8 @@ local function bindLocalCharacterVault(char)
             animator.AnimationPlayed:Connect(function(track)
                 if not (Toggles.FastVault and Toggles.FastVault.Value) then return end
 
-                if isVaultAnimation(track) or isVaultPromptActive() then
-                    executeFastVaultSlide()
+                if isVaultAnimation(track) then
+                    applyFastVaultFlowstate(track)
                 end
             end)
         end
@@ -3957,17 +3945,18 @@ end)
 -- UI ELEMENTS (VAULT TAB)
 ----------------------------------------------------------------------
 
--- Left Side: Fast Vault Controls
+-- Left Side: Fast Vault Controls (Flowstate Effect: 50% - 70% Quicker Vault)
 VaultGroupBox:AddToggle("FastVault", {
-    Text = "Fast Vault (Fast Slide & Rotate)",
+    Text = "Fast Vault (Window & Pallet)",
     Default = false,
-    Tooltip = "When tapping Space/Vault near a pallet or window, instantly slides and rotates you to the other side.",
+    Tooltip = "Flowstate Effect: Accelerates all window vaults and pallet slides by 50% to 70% with no cooldown.",
     Callback = function(val)
         if val then
             pcall(function()
+                local pct = Options.VaultSpeedBoost and Options.VaultSpeedBoost.Value or 60
                 Library:Notify({
                     Title = "Fast Vault (VD 2.9.6)",
-                    Description = "Fast Vault Active: Tap for slide to instantly rotate to the other side!",
+                    Description = "Flowstate Effect Active: Vaulting windows & pallets " .. tostring(pct) .. "% quicker!",
                     Time = 4,
                 })
             end)
@@ -3977,29 +3966,30 @@ VaultGroupBox:AddToggle("FastVault", {
 
 VaultGroupBox:AddDivider()
 
-VaultGroupBox:AddSlider("VaultSlideDistance", {
-    Text = "Slide Distance Across (Studs)",
-    Default = 7.5,
-    Min = 5.0,
-    Max = 12.0,
-    Rounding = 1,
+VaultGroupBox:AddSlider("VaultSpeedBoost", {
+    Text = "Vault Speed Boost",
+    Default = 60,
+    Min = 50,
+    Max = 70,
+    Rounding = 0,
+    Suffix = "%",
     Compact = false,
-    Tooltip = "Distance to slide across the pallet or window (7.5 studs clears standard pallets perfectly).",
+    Tooltip = "Percentage faster vaulting speed (50% to 70% quicker). Flowstate perk is only 20%.",
 })
 
-VaultGroupBox:AddToggle("VaultFaceForward", {
-    Text = "Face Forward (No 180° Flip)",
-    Default = false,
-    Tooltip = "By default (OFF), you rotate 180° to face the pallet from the other side for easy looping. Turn ON to face forward instead.",
+VaultGroupBox:AddToggle("NoVaultSlowdown", {
+    Text = "No Landing Slowdown",
+    Default = true,
+    Tooltip = "Eliminates post-vault landing fatigue delay so you sprint away instantly upon clearing the obstacle.",
 })
 
 -- Right Side: Fast Vault Information
 vaultStatusLabel = VaultInfoGroupBox:AddLabel("Status: Ready")
 VaultInfoGroupBox:AddDivider()
-VaultInfoGroupBox:AddLabel("• Fast Rotate: Tapping Space rotates you across to the other side.")
-VaultInfoGroupBox:AddLabel("• Pallet Looping: Automatically faces the pallet for instant counter-vaulting.")
-VaultInfoGroupBox:AddLabel("• Zero Stumble: No landing delay or recovery slowdown.")
-VaultInfoGroupBox:AddLabel("• Anti-Grab: Instant traversal prevents killer grabs during vaults.")
+VaultInfoGroupBox:AddLabel("• Flowstate Effect: Vaults 50% - 70% quicker (Flowstate is 20%).")
+VaultInfoGroupBox:AddLabel("• All Obstacles: Works on both Windows and Pallet slides.")
+VaultInfoGroupBox:AddLabel("• Permanent: Always active with no 50-70s cooldown.")
+VaultInfoGroupBox:AddLabel("• Natural Traversal: Smooth boosted animation & movement.")
 
 ----------------------------------------------------------------------
 -- UI ELEMENTS (OPTIMIZE TAB)
@@ -4163,25 +4153,18 @@ connections[#connections + 1] = Players.PlayerRemoving:Connect(function(player)
     end
 end)
 
--- Fast Vault Input: Space key press while near pallet/vault triggers instant slide & rotate
-connections[#connections + 1] = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if not (Toggles.FastVault and Toggles.FastVault.Value) then return end
-    if input.KeyCode == Enum.KeyCode.Space then
-        if isVaultPromptActive() then
-            executeFastVaultSlide()
-        end
-    end
-end)
-
--- Heartbeat animation booster for active vaults
+-- Heartbeat continuous vault speed enforcement (Maintains 50% - 70% faster playback)
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if Toggles.FastVault and Toggles.FastVault.Value and LocalPlayer.Character then
         local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
         local animator = hum and hum:FindFirstChildOfClass("Animator")
         if animator then
+            local mult = getVaultSpeedMultiplier()
             for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
                 if isVaultAnimation(track) then
-                    pcall(function() track:AdjustSpeed(4.0) end)
+                    if math.abs(track.Speed - mult) > 0.05 then
+                        pcall(function() track:AdjustSpeed(mult) end)
+                    end
                 end
             end
         end

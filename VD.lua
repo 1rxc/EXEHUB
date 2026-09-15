@@ -1,27 +1,18 @@
--- Violence District | EXE HUB Script VD 2.9.9 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.3 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
--- Multi-CDN Safe Fetcher: Immune to DNS blocks / 'Could not resolve host: raw.githubusercontent.com'
-local function fetchSource(path)
-    local mirrors = {
-        "https://cdn.jsdelivr.net/gh/deividcomsono/Obsidian@main/" .. path,
-        "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/" .. path,
-        "https://raw.githack.com/deividcomsono/Obsidian/main/" .. path,
-        "https://github.com/deividcomsono/Obsidian/raw/main/" .. path
-    }
-    for _, url in ipairs(mirrors) do
-        local success, content = pcall(game.HttpGet, game, url)
-        if success and content and #content > 50 then
-            return content
-        end
-    end
-    error("[EXE HUB] Failed to load UI library (" .. tostring(path) .. ") from all mirrors!")
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local function safeLoad(path)
+    local s, res = pcall(game.HttpGet, game, repo .. path)
+    if s and res and #res > 50 then return loadstring(res)() end
+    local s2, res2 = pcall(game.HttpGet, game, "https://cdn.jsdelivr.net/gh/deividcomsono/Obsidian@main/" .. path)
+    if s2 and res2 and #res2 > 50 then return loadstring(res2)() end
+    error("[EXE HUB] Failed to load " .. tostring(path))
 end
-
-local Library = loadstring(fetchSource("Library.lua"))()
-local ThemeManager = loadstring(fetchSource("addons/ThemeManager.lua"))()
-local SaveManager = loadstring(fetchSource("addons/SaveManager.lua"))()
+local Library = safeLoad("Library.lua")
+local ThemeManager = safeLoad("addons/ThemeManager.lua")
+local SaveManager = safeLoad("addons/SaveManager.lua")
 
 -- Protective hook: Prevents Roblox GetTextBoundsAsync from failing on rich text formatting
 if Library and Library.GetTextBounds then
@@ -82,7 +73,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.9",
+    Footer = "VD 2.9.3",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -856,10 +847,7 @@ local function setupPlayer(player)
         end
     end)
 
-    connections[#connections + 1] = player.CharacterRemoving:Connect(function(oldChar)
-        if pendingCombatChars and oldChar then
-            pendingCombatChars[oldChar] = nil
-        end
+    connections[#connections + 1] = player.CharacterRemoving:Connect(function()
         if playerHighlights[player] then
             pcall(function() playerHighlights[player]:Destroy() end)
             playerHighlights[player] = nil
@@ -1097,59 +1085,12 @@ local function registerGenerator(genInstance)
     end)
 end
 
-local isScanningGenerators = false
 local function scanGenerators()
-    if isScanningGenerators then return end
-    isScanningGenerators = true
-    task.spawn(function()
-        -- 1. Fast Tagged Discovery
-        pcall(function()
-            for _, tag in ipairs({"Generator", "Gen", "Objective", "Interactable"}) do
-                for _, obj in ipairs(CollectionService:GetTagged(tag)) do
-                    if isGenerator(obj) then
-                        registerGenerator(obj)
-                    end
-                end
-            end
-        end)
-
-        -- 2. Fast Folder Discovery
-        for _, folderName in ipairs({"Map", "Generators", "Interactions", "Objectives", "Props", "Spawns"}) do
-            local f = Workspace:FindFirstChild(folderName)
-            if f then
-                for _, desc in ipairs(f:GetDescendants()) do
-                    if isGenerator(desc) then
-                        registerGenerator(desc)
-                    end
-                end
-            end
+    for _, descendant in ipairs(Workspace:GetDescendants()) do
+        if isGenerator(descendant) then
+            registerGenerator(descendant)
         end
-
-        -- 3. Non-blocking Workspace scan (chunked to ensure silky smooth 60+ FPS without lag)
-        local count = 0
-        for _, child in ipairs(Workspace:GetChildren()) do
-            if not (child:IsA("Terrain") or child:IsA("Camera")) then
-                if isGenerator(child) then
-                    registerGenerator(child)
-                else
-                    pcall(function()
-                        for _, desc in ipairs(child:GetDescendants()) do
-                            if isGenerator(desc) then
-                                registerGenerator(desc)
-                            end
-                            count = count + 1
-                            if count % 350 == 0 then
-                                task.wait()
-                            end
-                        end
-                    end)
-                end
-            end
-        end
-
-        updateAllGeneratorHighlights()
-        isScanningGenerators = false
-    end)
+    end
 end
 
 ----------------------------------------------------------------------
@@ -1380,7 +1321,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.9 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.3 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -1474,7 +1415,7 @@ local function getFOVValue()
         end
     end
     if Options.FOVValue and Options.FOVValue.Value then
-        return math.clamp(Options.FOVValue.Value, 30, 120)
+        return Options.FOVValue.Value
     end
     return 70
 end
@@ -2304,7 +2245,7 @@ end
 
 local lastParryTick = 0
 local parriedTracks = {}
-local cachedMobileParryButtons = {}
+local combatBoundAnimators = {}
 
 local NonDamageActionKeywords = {
     "generator", "pallet", "door", "pickup", "drop", "hook", "unhook",
@@ -2522,10 +2463,9 @@ local function getParryingDagger()
         end
     end
 
-    -- 8. Check PlayerGui (GUI Item Slots & Touch Buttons - throttled)
+    -- 8. Check PlayerGui (GUI Item Slots & Touch Buttons)
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if pg and (tick() - (lastGuiDaggerCheck or 0) > 1.5) then
-        lastGuiDaggerCheck = tick()
+    if pg then
         for _, desc in ipairs(pg:GetDescendants()) do
             if desc:IsA("ImageButton") or desc:IsA("TextButton") or desc:IsA("ImageLabel") or desc:IsA("TextLabel") then
                 local dName = desc.Name:lower()
@@ -2631,28 +2571,21 @@ local function triggerParryInputs(daggerTool, mPos)
         end
     end)
 
-    -- 5. Fast Mobile / Touch Action Button Dispatch (Instant cached lookup - 0ms latency)
+    -- 5. PlayerGui Mobile / Touch Action Buttons (Direct lookup)
     pcall(function()
-        if #cachedMobileParryButtons == 0 then
-            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-            if pg then
-                for _, desc in ipairs(pg:GetDescendants()) do
-                    if (desc:IsA("ImageButton") or desc:IsA("TextButton")) then
-                        local dName = desc.Name:lower()
-                        if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") then
-                            table.insert(cachedMobileParryButtons, desc)
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            for _, desc in ipairs(pg:GetDescendants()) do
+                if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
+                    local dName = desc.Name:lower()
+                    if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") then
+                        if firesignal then
+                            firesignal(desc.Activated)
+                            firesignal(desc.MouseButton1Click)
+                        elseif desc.Activated then
+                            desc.Activated:Fire()
                         end
                     end
-                end
-            end
-        end
-        for _, btn in ipairs(cachedMobileParryButtons) do
-            if btn and btn.Parent and btn.Visible then
-                if firesignal then
-                    firesignal(btn.Activated)
-                    firesignal(btn.MouseButton1Click)
-                elseif btn.Activated then
-                    btn.Activated:Fire()
                 end
             end
         end
@@ -2948,8 +2881,8 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         lungeBonus = math.max(lungeBonus, 3.5)
     end
 
-    -- EARLY INTERCEPT: Minimum 22.5 studs reach ensures attacks are parried at swing startup, not point-blank!
-    local effectiveMaxDist = math.max(sliderDist + lungeBonus, 22.5)
+    -- EARLY INTERCEPT: Minimum 17.5 studs reach ensures attacks are parried at swing startup, not point-blank!
+    local effectiveMaxDist = math.max(sliderDist + lungeBonus, 17.5)
     if flatDist > effectiveMaxDist then
         return -- Killer is out of reach; attack will hit empty air!
     end
@@ -2988,14 +2921,10 @@ bindCombatListeners = function(player, char)
 
     local animator = char:FindFirstChildWhichIsA("Animator", true)
     if not animator then
-        if pendingCombatChars[char] then return end
-        pendingCombatChars[char] = true
-
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             local conn = hum.DescendantAdded:Connect(function(desc)
                 if desc:IsA("Animator") then
-                    pendingCombatChars[char] = nil
                     bindCombatListeners(player, char)
                 end
             end)
@@ -3003,7 +2932,6 @@ bindCombatListeners = function(player, char)
         end
         local conn2 = char.DescendantAdded:Connect(function(desc)
             if desc:IsA("Animator") then
-                pendingCombatChars[char] = nil
                 bindCombatListeners(player, char)
             end
         end)
@@ -3013,7 +2941,6 @@ bindCombatListeners = function(player, char)
 
     if combatBoundAnimators[animator] then return end
     combatBoundAnimators[animator] = true
-    pendingCombatChars[char] = nil
 
     local conn = animator.AnimationPlayed:Connect(function(track)
         checkAndTriggerParry(char, player, track)
@@ -3125,11 +3052,6 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
             end
         end
 
-        -- Support mobile Jump button / Space for upward flight on all devices
-        if hum and (hum.Jump or UserInputService:IsKeyDown(Enum.KeyCode.Space)) then
-            moveDir = moveDir + Vector3.new(0, 1, 0)
-        end
-
         local flySpeed = getFlySpeedValue()
         if moveDir.Magnitude > 0 then
             flyBodyVelocity.Velocity = moveDir.Unit * flySpeed
@@ -3180,9 +3102,9 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                                 nearestKillerDist = d
                             end
 
-                            -- Scan attack animations with early detection margin (up to 25 studs)
-                            if d <= math.max(maxDist + 8.0, 25.0) then
-                                local kAnim = (pChar:FindFirstChildOfClass("Humanoid") and pChar.Humanoid:FindFirstChildOfClass("Animator")) or pChar:FindFirstChildWhichIsA("Animator", true)
+                            -- Scan attack animations with early detection margin (up to 22 studs)
+                            if d <= math.max(maxDist + 6.0, 22.0) then
+                                local kAnim = pChar:FindFirstChildWhichIsA("Animator", true)
                                 if kAnim then
                                     for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
                                         if not isTrackParriedRecently(track) and isAttackAnimation(track) then
@@ -3464,30 +3386,6 @@ MovementGroupBox:AddDivider()
 local FlyToggle = MovementGroupBox:AddToggle("Fly", {
     Text = "Fly",
     Default = false,
-    Callback = function(val)
-        if not val then
-            if flyBodyVelocity then
-                pcall(function() flyBodyVelocity:Destroy() end)
-                flyBodyVelocity = nil
-            end
-            if flyBodyGyro then
-                pcall(function() flyBodyGyro:Destroy() end)
-                flyBodyGyro = nil
-            end
-            local char = LocalPlayer.Character
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            if hum then
-                hum.PlatformStand = false
-            end
-            if root then
-                pcall(function() root.AssemblyLinearVelocity = Vector3.zero end)
-            end
-            if applyPlayerSpeed then
-                applyPlayerSpeed()
-            end
-        end
-    end,
 })
 
 FlyToggle:AddKeyPicker("FlyKeybind", {
@@ -3551,7 +3449,7 @@ CameraGroupBox:AddInput("CustomFOVInput", {
     Finished = false,
     Text = "Custom FOV (Input Text)",
     Tooltip = "Type exact FOV amount (30 to 120)",
-    Placeholder = "Enter FOV (e.g. 70, 90, 110, 120)",
+    Placeholder = "Enter FOV (e.g. 70, 90, 110)",
     Callback = function(val)
         local num = tonumber(val)
         if num and num >= 30 and num <= 120 then
@@ -3793,29 +3691,20 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.9)",
-                        Description = "Notice: Parrying Dagger not found in inventory! Auto Parry will activate as soon as you obtain a Parrying Dagger.",
+                        Title = "Auto Parry (VD 2.9.3)",
+                        Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
                 end)
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.9)",
+                        Title = "Auto Parry (VD 2.9.3)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
                 end)
             end
-        else
-            -- Clean ON/OFF: When Auto Parry is turned OFF, immediately clear parry state & release inputs
-            lastParryTick = 0
-            table.clear(parriedTracks)
-            pcall(function()
-                local mPos = UserInputService:GetMouseLocation()
-                VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
-                VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, false, game, 1)
-            end)
         end
     end,
 })
@@ -3876,236 +3765,34 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
     end
 end)
 
-----------------------------------------------------------------------
--- SUPER LOW GRAPHICS & 10000 FPS ENGINE (VD 2.9.9)
-----------------------------------------------------------------------
-
-local isLowGraphicsActive = false
-local originalLightingState = {}
-local modifiedParts = {}
-local modifiedTextures = {}
-local modifiedEmitters = {}
-local modifiedEffects = {}
-
-local liveQualityLabel1 = nil
-local liveQualityLabel2 = nil
-
-local function unlock10000FPS()
-    pcall(function()
-        if setfpscap then
-            setfpscap(10000)
-            pcall(setfpscap, 0)
-        end
-        if set_fps_cap then
-            set_fps_cap(10000)
-            pcall(set_fps_cap, 0)
-        end
-        if setmaxfps then
-            setmaxfps(10000)
-        end
-        if setfps then
-            setfps(10000)
-        end
-        local ugs = UserSettings():GetService("UserGameSettings")
-        if ugs and ugs.FramerateMode then
-            ugs.FramerateMode = Enum.FramerateMode.Maximum
-        end
-    end)
-end
-
 local function applyNetworkOptimizations(enable)
     pcall(function()
         if enable then
+            -- 1. Incoming Replication Lag (Set to 0ms for instant client-server synchronization)
             settings().Network.IncomingReplicationLag = 0
-            pcall(function() settings().Network.SendRate = 120 end)
-            pcall(function() settings().Network.ReceiveRate = 120 end)
+            
+            -- 2. Enhanced Send / Receive Rate (Transmits inputs and receives world state at max rate)
+            settings().Network.SendRate = 120
+            settings().Network.ReceiveRate = 120
+            
+            -- 3. Disable Environmental Throttling (Eliminates packet throttling on background objects)
+            -- 4. Maximum FPS Cap (executor level, zero stutter, keep 200+ FPS)
+            pcall(function()
+                if setfpscap then setfpscap(0) end
+                if set_fps_cap then set_fps_cap(0) end
+            end)
         else
             settings().Network.IncomingReplicationLag = 0
-            pcall(function() settings().Network.SendRate = 60 end)
-            pcall(function() settings().Network.ReceiveRate = 60 end)
+            settings().Network.SendRate = 60
+            settings().Network.ReceiveRate = 60
+            settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Default
         end
     end)
 end
 
-local function setSuperLowGraphics(enable)
-    isLowGraphicsActive = enable
-
-    if enable then
-        -- 1. INSTANT 10000 FPS UNLOCK (NO SLIDERS / NO MANUAL NUMBERS REQUIRED)
-        unlock10000FPS()
-
-        -- 2. CLEAR ALL SYSTEM LAG & FLUSH GARBAGE RAM
-        pcall(function()
-            collectgarbage("collect")
-        end)
-
-        -- 3. REMOVE LIGHTING BLOAT (DISABLE SHADOWS & POST-PROCESSING EFFECTS)
-        pcall(function()
-            if not originalLightingState.saved then
-                originalLightingState = {
-                    saved = true,
-                    GlobalShadows = Lighting.GlobalShadows,
-                    FogEnd = Lighting.FogEnd
-                }
-            end
-            Lighting.GlobalShadows = false
-            Lighting.FogEnd = 9e9
-
-            for _, effect in ipairs(Lighting:GetChildren()) do
-                if effect:IsA("PostEffect") or effect:IsA("BlurEffect") or effect:IsA("BloomEffect") 
-                    or effect:IsA("SunRaysEffect") or effect:IsA("DepthOfFieldEffect") or effect:IsA("ColorCorrectionEffect") then
-                    if modifiedEffects[effect] == nil then
-                        modifiedEffects[effect] = effect.Enabled
-                    end
-                    effect.Enabled = false
-                end
-            end
-        end)
-
-        -- 4. OPTIMIZE TERRAIN (ZERO WATER OVERHEAD)
-        pcall(function()
-            local terrain = Workspace:FindFirstChildOfClass("Terrain")
-            if terrain then
-                terrain.WaterWaveSize = 0
-                terrain.WaterWaveSpeed = 0
-                terrain.WaterReflectance = 0
-                pcall(function() terrain.Decoration = false end)
-            end
-        end)
-
-        -- 5. SMOOTH PLASTIC TEXTURES, REMOVE SHADOWS & DISABLE PARTICLES
-        task.spawn(function()
-            for _, desc in ipairs(Workspace:GetDescendants()) do
-                if not isLowGraphicsActive then break end
-
-                -- Never touch player characters so survivors, killers, items & ESP stay clearly visible
-                local isChar = false
-                for _, pl in ipairs(Players:GetPlayers()) do
-                    if pl.Character and desc:IsDescendantOf(pl.Character) then
-                        isChar = true
-                        break
-                    end
-                end
-
-                if not isChar then
-                    if desc:IsA("BasePart") then
-                        if modifiedParts[desc] == nil then
-                            modifiedParts[desc] = {
-                                Material = desc.Material,
-                                CastShadow = desc.CastShadow
-                            }
-                        end
-                        desc.Material = Enum.Material.SmoothPlastic
-                        desc.CastShadow = false
-                    elseif desc:IsA("Decal") or desc:IsA("Texture") then
-                        if modifiedTextures[desc] == nil then
-                            modifiedTextures[desc] = desc.Transparency
-                        end
-                        desc.Transparency = 1
-                    elseif desc:IsA("ParticleEmitter") or desc:IsA("Smoke") or desc:IsA("Fire") or desc:IsA("Sparkles") or desc:IsA("Trail") then
-                        if modifiedEmitters[desc] == nil then
-                            modifiedEmitters[desc] = desc.Enabled
-                        end
-                        desc.Enabled = false
-                    end
-                end
-            end
-        end)
-
-        if liveQualityLabel1 and liveQualityLabel1.SetText then
-            liveQualityLabel1:SetText("FPS Mode : 10000 FPS Boost (Unlimited)")
-        end
-        if liveQualityLabel2 and liveQualityLabel2.SetText then
-            liveQualityLabel2:SetText("Graphics Engine : Super Low (Zero Lag)")
-        end
-
-    else
-        -- RESTORE 100% ORIGINAL GRAPHICS WHEN TURNED OFF (CLEAN LIFECYCLE)
-        pcall(function()
-            if originalLightingState.saved then
-                Lighting.GlobalShadows = originalLightingState.GlobalShadows
-                Lighting.FogEnd = originalLightingState.FogEnd
-            end
-
-            for effect, wasEnabled in pairs(modifiedEffects) do
-                if effect and effect.Parent then
-                    effect.Enabled = wasEnabled
-                end
-            end
-            table.clear(modifiedEffects)
-
-            for part, orig in pairs(modifiedParts) do
-                if part and part.Parent then
-                    part.Material = orig.Material
-                    part.CastShadow = orig.CastShadow
-                end
-            end
-            table.clear(modifiedParts)
-
-            for tex, origTrans in pairs(modifiedTextures) do
-                if tex and tex.Parent then
-                    tex.Transparency = origTrans
-                end
-            end
-            table.clear(modifiedTextures)
-
-            for emitter, wasEnabled in pairs(modifiedEmitters) do
-                if emitter and emitter.Parent then
-                    emitter.Enabled = wasEnabled
-                end
-            end
-            table.clear(modifiedEmitters)
-
-            local terrain = Workspace:FindFirstChildOfClass("Terrain")
-            if terrain then
-                terrain.WaterWaveSize = 0.15
-                terrain.WaterWaveSpeed = 10
-                terrain.WaterReflectance = 0.05
-            end
-        end)
-
-        if liveQualityLabel1 and liveQualityLabel1.SetText then
-            liveQualityLabel1:SetText("FPS Mode : Standard Unlocked")
-        end
-        if liveQualityLabel2 and liveQualityLabel2.SetText then
-            liveQualityLabel2:SetText("Graphics Engine : 100% Original (Pristine)")
-        end
-    end
-end
-
--- Apply initial instant 10000 FPS boost & network ping optimization on boot
-unlock10000FPS()
 applyNetworkOptimizations(true)
 
--- Left Side: 1-Click Instant 10000 FPS & Super Low Graphics (NO SLIDERS NEEDED)
-OptimizeGroupBox:AddToggle("SuperFPSBoost", {
-    Text = "Super Low Graphics & 10000 FPS",
-    Default = true,
-    Tooltip = "Instant 1-Click Optimization: Unlocks 10000 FPS, flushes all lag, removes shadows/particles, and enables Super Low Graphics for extreme speed!",
-    Callback = function(val)
-        setSuperLowGraphics(val)
-        if val then
-            pcall(function()
-                Library:Notify({
-                    Title = "FPS Optimizer (VD 2.9.9)",
-                    Description = "10000 FPS Boost & Super Low Graphics Active! All lag cleared.",
-                    Time = 4,
-                })
-            end)
-        else
-            pcall(function()
-                Library:Notify({
-                    Title = "FPS Optimizer (VD 2.9.9)",
-                    Description = "Super Low Graphics turned OFF. Original graphics cleanly restored!",
-                    Time = 4,
-                })
-            end)
-        end
-    end,
-})
-
-OptimizeGroupBox:AddDivider()
-
+-- Left Side: Ping & MS Booster
 OptimizeGroupBox:AddToggle("BoostPing", {
     Text = "Boost Ping / MS (Fast Network)",
     Default = true,
@@ -4121,37 +3808,32 @@ OptimizeGroupBox:AddToggle("FastInputLatency", {
     Tooltip = "Processes inputs, clicks, and parry triggers with zero queuing delay",
 })
 
+OptimizeGroupBox:AddToggle("MemoryOptimizer", {
+    Text = "Memory & GC Optimizer",
+    Default = true,
+    Tooltip = "Automatically cleans unused memory cycles in background to prevent frame/ping stutters",
+    Callback = function(val)
+        if val then
+            pcall(function()
+                collectgarbage("setstepmul", 300)
+                collectgarbage("setpause", 100)
+            end)
+        end
+    end,
+})
+
 OptimizeGroupBox:AddDivider()
 
-OptimizeGroupBox:AddButton("Boost FPS & Clear All Lag Now (10000 FPS)", function()
-    unlock10000FPS()
-    setSuperLowGraphics(true)
-    if Toggles.SuperFPSBoost and Toggles.SuperFPSBoost.Value ~= true then
-        pcall(function() Toggles.SuperFPSBoost:SetValue(true) end)
-    end
+OptimizeGroupBox:AddButton("Flush Memory & Ping Cache Now", function()
     pcall(function()
         local before = gcinfo()
         collectgarbage("collect")
         local after = gcinfo()
         local freed = math.max(0, before - after)
         Library:Notify({
-            Title = "FPS Optimizer",
-            Description = "FPS boosted to 10000! Cleared " .. string.format("%.1f KB", freed) .. " RAM lag.",
+            Title = "Optimizer",
+            Description = "Flushed " .. string.format("%.1f KB", freed) .. " RAM. Latency refreshed!",
             Time = 4,
-        })
-    end)
-end)
-
-OptimizeGroupBox:AddButton("Reset Graphics to Original High Quality", function()
-    setSuperLowGraphics(false)
-    if Toggles.SuperFPSBoost and Toggles.SuperFPSBoost.Value ~= false then
-        pcall(function() Toggles.SuperFPSBoost:SetValue(false) end)
-    end
-    pcall(function()
-        Library:Notify({
-            Title = "Graphics Restored",
-            Description = "100% Original high quality graphics restored!",
-            Time = 3,
         })
     end)
 end)
@@ -4171,8 +3853,8 @@ end)
 
 NetworkMonitorGroupBox:AddDivider()
 
-liveQualityLabel1 = NetworkMonitorGroupBox:AddLabel("FPS Mode : 10000 FPS Boost (Unlimited)")
-liveQualityLabel2 = NetworkMonitorGroupBox:AddLabel("Graphics Engine : Super Low (Zero Lag)")
+local liveQualityLabel1 = NetworkMonitorGroupBox:AddLabel("Visual Quality : 100% Original")
+local liveQualityLabel2 = NetworkMonitorGroupBox:AddLabel("Graphics State : Untouched (Pristine)")
 
 pcall(function()
     if liveQualityLabel1 and liveQualityLabel1.TextLabel then liveQualityLabel1.TextLabel.RichText = false end
@@ -4207,9 +3889,7 @@ NetworkMonitorGroupBox:AddButton("Refresh Network Stats", function()
     updateNetworkMonitor()
 end)
 
--- Apply initial 10000 FPS unlock & network ping boost on boot
-unlock10000FPS()
-setSuperLowGraphics(true)
+-- Apply initial network ping boost on boot
 applyNetworkOptimizations(true)
 
 ----------------------------------------------------------------------
@@ -4231,10 +3911,8 @@ end)
 scanGenerators()
 
 connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
-    if descendant:IsA("Model") or descendant:IsA("ProximityPrompt") then
-        if isGenerator(descendant) then
-            registerGenerator(descendant)
-        end
+    if isGenerator(descendant) then
+        registerGenerator(descendant)
     end
 end)
 
@@ -4496,7 +4174,7 @@ pcall(function()
             end
             if Options.CustomFOVInput and Options.FOVValue then
                 local fovNum = tonumber(Options.CustomFOVInput.Value)
-                if fovNum and fovNum >= 30 and fovNum <= 120 and Options.FOVValue.Value ~= fovNum then
+                if fovNum and fovNum >= 30 and fovNum <= 130 and Options.FOVValue.Value ~= fovNum then
                     Options.FOVValue:SetValue(fovNum)
                 end
             end
@@ -4537,8 +4215,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.9 Loaded Successfully!",
+        Description = "VD 2.9.3 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.9 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.3 Loaded Successfully! Enjoy!")
 end)

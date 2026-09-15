@@ -1765,6 +1765,49 @@ end
 
 task.defer(hookStunRemotes)
 
+-- Game UI Stability Patch: Automatically patches missing 'Items' container in Browse_loadout_killer to prevent game script crash
+local function patchKillerLoadoutItems(inst)
+    if not inst then return end
+    pcall(function()
+        if inst.Name == "Browse_loadout_killer" or inst.Name == "Browse_loadout_survivor" then
+            if not inst:FindFirstChild("Items") then
+                local dummy = Instance.new("Frame")
+                dummy.Name = "Items"
+                dummy.Visible = false
+                dummy.Size = UDim2.new(0, 0, 0, 0)
+                dummy.Parent = inst
+            end
+        end
+    end)
+end
+
+local function applyGameUiPatches()
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if pg then
+            for _, desc in ipairs(pg:GetDescendants()) do
+                if desc.Name == "Browse_loadout_killer" or desc.Name == "Browse_loadout_survivor" then
+                    patchKillerLoadoutItems(desc)
+                end
+            end
+        end
+    end)
+end
+
+task.spawn(function()
+    pcall(function()
+        applyGameUiPatches()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
+        if pg then
+            pg.DescendantAdded:Connect(function(desc)
+                if desc.Name == "Browse_loadout_killer" or desc.Name == "Browse_loadout_survivor" then
+                    patchKillerLoadoutItems(desc)
+                end
+            end)
+        end
+    end)
+end)
+
 -- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     if not (Toggles.AntiStun and Toggles.AntiStun.Value) then return end
@@ -4863,6 +4906,11 @@ task.spawn(function()
                 else
                     daggerStatusLabel:SetText("Dagger: Not in Inventory (Cannot Activate)")
                 end
+            end
+
+            -- Apply Game UI bug fixes
+            if applyGameUiPatches then
+                applyGameUiPatches()
             end
 
             -- Update Network & Ping Stats in Optimize Tab

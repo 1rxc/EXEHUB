@@ -2,10 +2,26 @@
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+-- Multi-CDN Safe Fetcher: Immune to DNS blocks / 'Could not resolve host: raw.githubusercontent.com'
+local function fetchSource(path)
+    local mirrors = {
+        "https://cdn.jsdelivr.net/gh/deividcomsono/Obsidian@main/" .. path,
+        "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/" .. path,
+        "https://raw.githack.com/deividcomsono/Obsidian/main/" .. path,
+        "https://github.com/deividcomsono/Obsidian/raw/main/" .. path
+    }
+    for _, url in ipairs(mirrors) do
+        local success, content = pcall(game.HttpGet, game, url)
+        if success and content and #content > 50 then
+            return content
+        end
+    end
+    error("[EXE HUB] Failed to load UI library (" .. tostring(path) .. ") from all mirrors!")
+end
+
+local Library = loadstring(fetchSource("Library.lua"))()
+local ThemeManager = loadstring(fetchSource("addons/ThemeManager.lua"))()
+local SaveManager = loadstring(fetchSource("addons/SaveManager.lua"))()
 
 -- Protective hook: Prevents Roblox GetTextBoundsAsync from failing on rich text formatting
 if Library and Library.GetTextBounds then

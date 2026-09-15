@@ -3310,8 +3310,8 @@ connections[#connections + 1] = RunService.Stepped:Connect(function()
     end
 end)
 
--- Twist of Fate Aim Lock Render Loop (100% Aim to Killer)
-connections[#connections + 1] = RunService.RenderStepped:Connect(function()
+-- Twist of Fate Aim Lock Render Loop (100% Smooth Aim to Killer)
+connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
     if not (Toggles.AimToKiller and Toggles.AimToKiller.Value) then return end
 
     local gun, isEq = getTwistOfFate()
@@ -3354,13 +3354,27 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
         if cam then
             local camPos = cam.CFrame.Position
             local targetPos = targetPart.Position
-            cam.CFrame = CFrame.new(camPos, targetPos)
+            local targetLook = CFrame.new(camPos, targetPos)
+
+            local isSmooth = not (Toggles.SmoothAim and Toggles.SmoothAim.Value == false)
+            if isSmooth then
+                local speed = Options.AimSmoothSpeed and Options.AimSmoothSpeed.Value or 18
+                local alpha = math.clamp((dt or 0.016) * speed, 0.08, 0.95)
+                cam.CFrame = cam.CFrame:Lerp(targetLook, alpha)
+            else
+                cam.CFrame = targetLook
+            end
         end
+
         local myChar = LocalPlayer.Character
         local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
         if myRoot then
             local flatTarget = Vector3.new(targetPart.Position.X, myRoot.Position.Y, targetPart.Position.Z)
-            myRoot.CFrame = CFrame.new(myRoot.Position, flatTarget)
+            if (flatTarget - myRoot.Position).Magnitude > 0.5 then
+                local charTargetRot = CFrame.new(myRoot.Position, flatTarget)
+                local alphaChar = math.clamp((dt or 0.016) * 14, 0.08, 0.9)
+                myRoot.CFrame = myRoot.CFrame:Lerp(charTargetRot, alphaChar)
+            end
         end
     end
 end)
@@ -4185,6 +4199,22 @@ TwistOfFateGroupBox:AddToggle("SilentAim", {
     Text = "Silent Aim (100% Hit Chance)",
     Default = true,
     Tooltip = "Directs mouse raycasts, hit positions, and bullet trajectories directly into the Killer's hitbox, guaranteeing 100% shot accuracy.",
+})
+
+TwistOfFateGroupBox:AddToggle("SmoothAim", {
+    Text = "100% Smooth Aim Tracking",
+    Default = true,
+    Tooltip = "Enables 100% buttery smooth interpolated camera tracking. Eliminates screen shake, jitter, and character stutter while keeping aim locked.",
+})
+
+TwistOfFateGroupBox:AddSlider("AimSmoothSpeed", {
+    Text = "Aim Smoothness Speed",
+    Default = 18,
+    Min = 5,
+    Max = 40,
+    Rounding = 1,
+    Compact = false,
+    Tooltip = "Controls how smoothly the camera glides onto the killer. Default 18 provides 100% buttery smooth tracking at any framerate.",
 })
 
 TwistOfFateGroupBox:AddToggle("AntiMisfire", {

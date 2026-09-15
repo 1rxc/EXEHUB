@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9.6 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.7 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Vault | Optimize | Settings
 
@@ -74,7 +74,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.6",
+    Footer = "VD 2.9.7",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -840,7 +840,7 @@ local function bindLocalCharacterAntiStun(char)
 end
 
 ----------------------------------------------------------------------
--- FAST VAULT SYSTEM (VD 2.9.6 - FLOWSTATE EFFECT: 50% - 70% QUICKER VAULT)
+-- FAST VAULT SYSTEM (VD 2.9.7 - FLOWSTATE EFFECT: 50% - 70% QUICKER VAULT)
 ----------------------------------------------------------------------
 
 local VaultKeywords = {
@@ -853,6 +853,9 @@ local VaultKeywords = {
 
 local vaultStatusLabel = nil
 local lastVaultStartTime = 0
+local cachedVaultPromptState = false
+local lastVaultPromptCheckTick = 0
+local activeVaultTracks = {}
 
 local function getVaultSpeedMultiplier()
     local pct = 60
@@ -863,8 +866,14 @@ local function getVaultSpeedMultiplier()
     return 1 + (math.clamp(pct, 50, 70) / 100)
 end
 
--- Detects if the in-game VAULT prompt is currently displayed on player screen
+-- Cached detection (0.2s debounce to prevent CPU frame drops on Heartbeat)
 local function isVaultPromptActive()
+    local now = tick()
+    if now - lastVaultPromptCheckTick < 0.2 then
+        return cachedVaultPromptState
+    end
+    lastVaultPromptCheckTick = now
+
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
     if pg then
         for _, desc in ipairs(pg:GetDescendants()) do
@@ -878,7 +887,10 @@ local function isVaultPromptActive()
                             if not cur.Visible then isVis = false break end
                             cur = cur.Parent
                         end
-                        if isVis then return true end
+                        if isVis then
+                            cachedVaultPromptState = true
+                            return true
+                        end
                     end
                 end
             end
@@ -897,15 +909,20 @@ local function isVaultPromptActive()
         if hit and hit.Instance then
             local hitName = (hit.Instance.Name .. " " .. (hit.Instance.Parent and hit.Instance.Parent.Name or "")):lower()
             if hitName:find("pallet") or hitName:find("vault") or hitName:find("window") or hitName:find("obstacle") or hitName:find("wood") then
+                cachedVaultPromptState = true
                 return true
             end
         end
     end
+
+    cachedVaultPromptState = false
     return false
 end
 
 local function isVaultAnimation(track)
     if not track then return false end
+    if activeVaultTracks[track] then return true end
+
     local tName = (track.Name or ""):lower()
     local animId = ""
     if track.Animation then
@@ -914,6 +931,10 @@ local function isVaultAnimation(track)
     end
     for _, kw in ipairs(VaultKeywords) do
         if tName:find(kw) or animId:find(kw) then
+            activeVaultTracks[track] = true
+            track.Stopped:Once(function()
+                activeVaultTracks[track] = nil
+            end)
             return true
         end
     end
@@ -924,6 +945,10 @@ local function isVaultAnimation(track)
             or prio == Enum.AnimationPriority.Action2 
             or prio == Enum.AnimationPriority.Action3 
             or prio == Enum.AnimationPriority.Action4 then
+            activeVaultTracks[track] = true
+            track.Stopped:Once(function()
+                activeVaultTracks[track] = nil
+            end)
             return true
         end
     end
@@ -1275,12 +1300,59 @@ local function registerGenerator(genInstance)
     end)
 end
 
+local isScanningGenerators = false
 local function scanGenerators()
-    for _, descendant in ipairs(Workspace:GetDescendants()) do
-        if isGenerator(descendant) then
-            registerGenerator(descendant)
+    if isScanningGenerators then return end
+    isScanningGenerators = true
+    task.spawn(function()
+        -- 1. Fast Tagged Discovery
+        pcall(function()
+            for _, tag in ipairs({"Generator", "Gen", "Objective", "Interactable"}) do
+                for _, obj in ipairs(CollectionService:GetTagged(tag)) do
+                    if isGenerator(obj) then
+                        registerGenerator(obj)
+                    end
+                end
+            end
+        end)
+
+        -- 2. Fast Folder Discovery
+        for _, folderName in ipairs({"Map", "Generators", "Interactions", "Objectives", "Props", "Spawns"}) do
+            local f = Workspace:FindFirstChild(folderName)
+            if f then
+                for _, desc in ipairs(f:GetDescendants()) do
+                    if isGenerator(desc) then
+                        registerGenerator(desc)
+                    end
+                end
+            end
         end
-    end
+
+        -- 3. Non-blocking Workspace scan (chunked to ensure silky smooth 200+ FPS without freeze)
+        local count = 0
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if not (child:IsA("Terrain") or child:IsA("Camera")) then
+                if isGenerator(child) then
+                    registerGenerator(child)
+                else
+                    pcall(function()
+                        for _, desc in ipairs(child:GetDescendants()) do
+                            if isGenerator(desc) then
+                                registerGenerator(desc)
+                            end
+                            count = count + 1
+                            if count % 350 == 0 then
+                                task.wait()
+                            end
+                        end
+                    end)
+                end
+            end
+        end
+
+        updateAllGeneratorHighlights()
+        isScanningGenerators = false
+    end)
 end
 
 ----------------------------------------------------------------------
@@ -1511,7 +1583,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.6 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.7 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -3886,7 +3958,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.6)",
+                        Title = "Auto Parry (VD 2.9.7)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3894,7 +3966,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.6)",
+                        Title = "Auto Parry (VD 2.9.7)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3955,7 +4027,7 @@ VaultGroupBox:AddToggle("FastVault", {
             pcall(function()
                 local pct = Options.VaultSpeedBoost and Options.VaultSpeedBoost.Value or 60
                 Library:Notify({
-                    Title = "Fast Vault (VD 2.9.6)",
+                    Title = "Fast Vault (VD 2.9.7)",
                     Description = "Flowstate Effect Active: Vaulting windows & pallets " .. tostring(pct) .. "% quicker!",
                     Time = 4,
                 })
@@ -4174,8 +4246,10 @@ end)
 scanGenerators()
 
 connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
-    if isGenerator(descendant) then
-        registerGenerator(descendant)
+    if descendant:IsA("Model") or descendant:IsA("ProximityPrompt") then
+        if isGenerator(descendant) then
+            registerGenerator(descendant)
+        end
     end
 end)
 
@@ -4478,8 +4552,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.6 Loaded Successfully!",
+        Description = "VD 2.9.7 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.6 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.7 Loaded Successfully! Enjoy!")
 end)

@@ -1738,7 +1738,19 @@ end
 
 task.defer(hookStunRemotes)
 
--- Game UI Stability Patch: Automatically patches missing 'Items' container in Browse_loadout_killer to prevent game script crash
+-- Game Stability Patch: Automatically patches missing 'Items' and silences broken Character Lookscript (Line 431)
+local function checkAndFixLookscript(char)
+    if not char then return end
+    pcall(function()
+        if not (Toggles.FixLookscript and Toggles.FixLookscript.Value == false) then
+            local ls = char:FindFirstChild("Lookscript") or char:FindFirstChild("LookScript")
+            if ls and ls:IsA("LocalScript") and not ls.Disabled then
+                ls.Disabled = true
+            end
+        end
+    end)
+end
+
 local function patchKillerLoadoutItems(inst)
     if not inst then return end
     pcall(function()
@@ -1756,6 +1768,9 @@ end
 
 local function applyGameUiPatches()
     pcall(function()
+        if LocalPlayer.Character then
+            checkAndFixLookscript(LocalPlayer.Character)
+        end
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then
             for _, desc in ipairs(pg:GetDescendants()) do
@@ -1770,6 +1785,13 @@ end
 task.spawn(function()
     pcall(function()
         applyGameUiPatches()
+        if LocalPlayer.Character then
+            checkAndFixLookscript(LocalPlayer.Character)
+        end
+        LocalPlayer.CharacterAdded:Connect(function(char)
+            task.wait(0.1)
+            checkAndFixLookscript(char)
+        end)
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 5)
         if pg then
             pg.DescendantAdded:Connect(function(desc)
@@ -4690,6 +4712,17 @@ OptimizeGroupBox:AddToggle("FastInputLatency", {
     Text = "Zero Input Latency",
     Default = true,
     Tooltip = "Processes inputs, clicks, and parry triggers with zero queuing delay",
+})
+
+OptimizeGroupBox:AddToggle("FixLookscript", {
+    Text = "Fix Lookscript Error (Line 431)",
+    Default = true,
+    Tooltip = "Automatically patches and silences the broken game script 'Workspace.3r0yx.Lookscript' to eliminate 'Unable to cast value to Object' console spam.",
+    Callback = function(val)
+        if val and LocalPlayer.Character then
+            checkAndFixLookscript(LocalPlayer.Character)
+        end
+    end,
 })
 
 OptimizeGroupBox:AddToggle("MemoryOptimizer", {

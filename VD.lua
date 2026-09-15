@@ -776,7 +776,11 @@ end
 -- HIGHLIGHT HANDLERS
 ----------------------------------------------------------------------
 
-local function updatePlayerHighlight(player, hl)
+local updatePlayerHighlight
+local applyPlayerHighlight
+local updateAllPlayerHighlights
+
+updatePlayerHighlight = function(player, hl)
     if not hl or not hl.Parent then return end
     hl.Enabled = (Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value == true)
 
@@ -792,32 +796,7 @@ local function updatePlayerHighlight(player, hl)
     hl.OutlineTransparency = showOutline and 0 or 1
 end
 
-local function updateAllPlayerHighlights()
-    local isEnabled = (Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value == true)
-    if not isEnabled then
-        for player, hl in pairs(playerHighlights) do
-            if hl and hl.Parent then
-                hl.Enabled = false
-            end
-        end
-        return
-    end
-
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer or (Toggles.IncludeLocalPlayer and Toggles.IncludeLocalPlayer.Value) then
-            if player.Character then
-                local hl = playerHighlights[player]
-                if not hl or not hl.Parent then
-                    applyPlayerHighlight(player, player.Character)
-                else
-                    updatePlayerHighlight(player, hl)
-                end
-            end
-        end
-    end
-end
-
-local function applyPlayerHighlight(player, character)
+applyPlayerHighlight = function(player, character)
     if not character then return end
     if player == LocalPlayer and not (Toggles.IncludeLocalPlayer and Toggles.IncludeLocalPlayer.Value) then
         return
@@ -842,6 +821,31 @@ local function applyPlayerHighlight(player, character)
 
     playerHighlights[player] = hl
     updatePlayerHighlight(player, hl)
+end
+
+updateAllPlayerHighlights = function()
+    local isEnabled = (Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value == true)
+    if not isEnabled then
+        for player, hl in pairs(playerHighlights) do
+            if hl and hl.Parent then
+                hl.Enabled = false
+            end
+        end
+        return
+    end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer or (Toggles.IncludeLocalPlayer and Toggles.IncludeLocalPlayer.Value) then
+            if player.Character then
+                local hl = playerHighlights[player]
+                if not hl or not hl.Parent then
+                    applyPlayerHighlight(player, player.Character)
+                else
+                    updatePlayerHighlight(player, hl)
+                end
+            end
+        end
+    end
 end
 
 local function bindLocalCharacterAntiStun(char)
@@ -3890,7 +3894,7 @@ AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
 end)
 
 ----------------------------------------------------------------------
--- UI ELEMENTS (SERVER TAB - SERVER LIST & HOPPER)
+-- UI ELEMENTS (SERVER TAB - 0 TO 1 PLAYER SERVER LIST & HOPPER)
 ----------------------------------------------------------------------
 
 local cachedServerList = {}
@@ -3898,16 +3902,33 @@ local isScanningServers = false
 local serverStatusLabel = nil
 
 local function safeHttpGet(url)
-    local s, res = pcall(game.HttpGet, game, url)
-    if s and res and #res > 20 then return res end
-
+    -- 1. Try executor request function with browser headers (Solara, Wave, Delta, Codex, Krnl, etc.)
     local req = (syn and syn.request) or (http and http.request) or http_request or request
     if req then
-        local s2, res2 = pcall(req, { Url = url, Method = "GET" })
-        if s2 and res2 and res2.Body and #res2.Body > 20 then
-            return res2.Body
+        local s, res = pcall(req, {
+            Url = url,
+            Method = "GET",
+            Headers = {
+                ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                ["Accept"] = "application/json"
+            }
+        })
+        if s and type(res) == "table" then
+            local body = res.Body or res.body or res.Response or res.response
+            if type(body) == "string" and #body > 20 then
+                return body
+            end
         end
     end
+
+    -- 2. Direct game:HttpGet call with pcall closure
+    local s2, res2 = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if s2 and type(res2) == "string" and #res2 > 20 then
+        return res2
+    end
+
     return nil
 end
 
@@ -3916,7 +3937,7 @@ local function teleportToServer(jobId)
     pcall(function()
         Library:Notify({
             Title = "Server Hop",
-            Description = "Teleporting to server (" .. jobId:sub(1, 8) .. "...)",
+            Description = "Teleporting to 0-1 player server (" .. jobId:sub(1, 8) .. "...)",
             Time = 5,
         })
     end)
@@ -3933,6 +3954,21 @@ local function teleportToServer(jobId)
     end)
 end
 
+-- Teleport Fail Notification Handler
+pcall(function()
+    TeleportService.TeleportInitFailed:Connect(function(player, teleportResult, errorMessage)
+        if player == LocalPlayer then
+            pcall(function()
+                Library:Notify({
+                    Title = "Server Hop Failed",
+                    Description = "Could not join: " .. tostring(errorMessage or "Server may be full or closed. Try another!"),
+                    Time = 5,
+                })
+            end)
+        end
+    end)
+end)
+
 local function scanLowPlayerServers(callback)
     if isScanningServers then return end
     isScanningServers = true
@@ -3940,29 +3976,59 @@ local function scanLowPlayerServers(callback)
     task.spawn(function()
         pcall(function()
             if serverStatusLabel then
-                serverStatusLabel:SetText("Status: Scanning Roblox public servers...")
+                serverStatusLabel:SetText("Status: Searching for 0-1 player servers...")
             end
         end)
 
         local placeId = game.PlaceId
-        local currentJob = game.JobId
+        local currentJob = tostring(game.JobId or "")
         local found = {}
         local cursor = ""
-        local maxPages = 4
         local page = 0
+        local maxPages = 4
 
         while page < maxPages do
             page = page + 1
+
+            -- Primary URL: sortOrder=Asc returns lowest player count servers first
             local url = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?sortOrder=Asc&limit=100"
             if cursor ~= "" then
                 url = url .. "&cursor=" .. cursor
             end
 
             local raw = safeHttpGet(url)
+            -- Fallback URL: standard query without sort param if Asc is rejected
+            if not raw or #raw < 20 then
+                local fallbackUrl = "https://games.roblox.com/v1/games/" .. tostring(placeId) .. "/servers/Public?limit=100"
+                if cursor ~= "" then
+                    fallbackUrl = fallbackUrl .. "&cursor=" .. cursor
+                end
+                raw = safeHttpGet(fallbackUrl)
+            end
+
             if not raw then break end
 
-            local ok, json = pcall(HttpService.JSONDecode, HttpService, raw)
-            if not ok or not json or not json.data then break end
+            local ok, json = pcall(function()
+                return HttpService:JSONDecode(raw)
+            end)
+            if not ok or not json then break end
+
+            -- Rate limit check
+            if json.errors and #json.errors > 0 then
+                pcall(function()
+                    if serverStatusLabel then
+                        serverStatusLabel:SetText("Status: Rate limit reached. Wait 5s and retry.")
+                    end
+                    Library:Notify({
+                        Title = "Server List",
+                        Description = "Roblox API rate limit reached. Please wait a few seconds before refreshing!",
+                        Time = 4,
+                    })
+                end)
+                break
+            end
+
+            if not json.data then break end
 
             for _, srv in ipairs(json.data) do
                 local sId = tostring(srv.id or "")
@@ -3970,7 +4036,8 @@ local function scanLowPlayerServers(callback)
                 local maxP = tonumber(srv.maxPlayers) or 0
                 local ping = tonumber(srv.ping) or 0
 
-                if sId ~= "" and sId ~= currentJob and playing < maxP then
+                -- STRICT FILTER: Keep ONLY servers with 0 or 1 player
+                if sId ~= "" and sId ~= currentJob and playing <= 1 and playing < maxP then
                     table.insert(found, {
                         id = sId,
                         playing = playing,
@@ -3981,14 +4048,20 @@ local function scanLowPlayerServers(callback)
                 end
             end
 
+            -- If we found 0-1 player servers, stop early to avoid 429
+            if #found >= 10 then
+                break
+            end
+
             if json.nextPageCursor and tostring(json.nextPageCursor) ~= "null" and tostring(json.nextPageCursor) ~= "" then
                 cursor = tostring(json.nextPageCursor)
+                task.wait(0.3) -- Stagger between requests to prevent 429
             else
                 break
             end
         end
 
-        -- Sort ascending by players so 0 and 1 player servers are always first
+        -- Sort ascending: 0 players first, then 1 player, then lowest ping
         table.sort(found, function(a, b)
             if a.playing == b.playing then
                 return a.ping < b.ping
@@ -4005,12 +4078,12 @@ local function scanLowPlayerServers(callback)
     end)
 end
 
--- Left Side: Quick Server Hop Controls
+-- Left Side: Quick Server Hop Controls (0-1 Players)
 ServerQuickGroupBox:AddButton("Hop to Empty / Lowest Server (0-1 Players)", function()
     pcall(function()
         Library:Notify({
             Title = "Server Hop",
-            Description = "Searching for empty or 1-player server...",
+            Description = "Searching for 0-1 player server...",
             Time = 4,
         })
     end)
@@ -4020,14 +4093,13 @@ ServerQuickGroupBox:AddButton("Hop to Empty / Lowest Server (0-1 Players)", func
             pcall(function()
                 Library:Notify({
                     Title = "Server Hop",
-                    Description = "No other public servers found. Try refreshing!",
+                    Description = "No 0-1 player servers found right now. Try refreshing!",
                     Time = 5,
                 })
             end)
             return
         end
 
-        -- Pick the lowest player count server (first entry is lowest due to sort)
         local target = servers[1]
         teleportToServer(target.id)
     end)
@@ -4039,7 +4111,7 @@ ServerQuickGroupBox:AddButton("Random Server Hop", function()
     pcall(function()
         Library:Notify({
             Title = "Server Hop",
-            Description = "Finding random public server...",
+            Description = "Finding random 0-1 player server...",
             Time = 4,
         })
     end)
@@ -4067,57 +4139,69 @@ ServerQuickGroupBox:AddLabel("Current Place ID: " .. tostring(game.PlaceId))
 local currentJobLabel = ServerQuickGroupBox:AddLabel("Current Job: " .. tostring(game.JobId):sub(1, 10) .. "...")
 local currentPlayersLabel = ServerQuickGroupBox:AddLabel("Current Players: " .. tostring(#Players:GetPlayers()))
 
--- Right Side: Server Browser & 0-1 Player Selector
-serverStatusLabel = ServerBrowserGroupBox:AddLabel("Status: Click Refresh to Scan")
+-- Right Side: Dedicated 0-1 Player Server Browser
+serverStatusLabel = ServerBrowserGroupBox:AddLabel("Status: Click Refresh to Scan 0-1 Players")
 
-local ServerDropdown = ServerBrowserGroupBox:AddDropdown("SelectedServer", {
-    Values = { "None - Click Refresh Below" },
-    Default = "None - Click Refresh Below",
-    Multi = false,
-    Text = "Available Servers",
-    Tooltip = "Select any server from the scanned list to teleport.",
-})
+local ServerDropdown
 
-ServerBrowserGroupBox:AddButton("Refresh Server List (Find 0-1 Players)", function()
+ServerBrowserGroupBox:AddButton("Refresh Server List (0-1 Players Only)", function()
+    pcall(function()
+        serverStatusLabel:SetText("Status: Scanning for 0-1 player servers...")
+        Library:Notify({
+            Title = "Server Browser",
+            Description = "Scanning Roblox public servers for 0-1 players...",
+            Time = 3,
+        })
+    end)
+
     scanLowPlayerServers(function(servers)
         if #servers == 0 then
             pcall(function()
-                ServerDropdown:SetValues({ "No other servers found" })
-                ServerDropdown:SetValue("No other servers found")
-                serverStatusLabel:SetText("Status: No other public servers found.")
+                ServerDropdown:SetValues({ "No 0-1 player servers found" })
+                ServerDropdown:SetValue("No 0-1 player servers found")
+                serverStatusLabel:SetText("Status: No 0-1 player servers currently available.")
+                Library:Notify({
+                    Title = "Server Browser",
+                    Description = "No 0-1 player servers found right now. Try refreshing again!",
+                    Time = 4,
+                })
             end)
             return
         end
 
         local displayList = {}
-        local emptyOrOneCount = 0
         for _, srv in ipairs(servers) do
             table.insert(displayList, srv.display)
-            if srv.playing <= 1 then
-                emptyOrOneCount = emptyOrOneCount + 1
-            end
         end
 
         pcall(function()
             ServerDropdown:SetValues(displayList)
             ServerDropdown:SetValue(displayList[1])
-            serverStatusLabel:SetText("Found " .. tostring(#servers) .. " servers (" .. tostring(emptyOrOneCount) .. " with 0-1 players)")
+            serverStatusLabel:SetText("Found " .. tostring(#servers) .. " server(s) with 0-1 players!")
             Library:Notify({
                 Title = "Server List Refreshed",
-                Description = "Found " .. tostring(#servers) .. " servers (" .. tostring(emptyOrOneCount) .. " with 0-1 players).",
+                Description = "Found " .. tostring(#servers) .. " server(s) with 0-1 players!",
                 Time = 4,
             })
         end)
     end)
 end)
 
+ServerDropdown = ServerBrowserGroupBox:AddDropdown("SelectedServer", {
+    Values = { "Click 'Refresh Server List' Above" },
+    Default = "Click 'Refresh Server List' Above",
+    Multi = false,
+    Text = "Available Servers (0-1 Players Only)",
+    Tooltip = "Select any 0 or 1 player server from the scanned list to teleport.",
+})
+
 ServerBrowserGroupBox:AddButton("Join Selected Server", function()
     local sel = Options.SelectedServer and Options.SelectedServer.Value
-    if not sel or sel:find("None") or sel:find("No other") then
+    if not sel or sel:find("Click") or sel:find("No 0%-1") or sel:find("No other") or sel:find("None") then
         pcall(function()
             Library:Notify({
                 Title = "Server Hop",
-                Description = "Please click 'Refresh Server List' and select a server first!",
+                Description = "Please click 'Refresh Server List' and select a 0-1 player server first!",
                 Time = 4,
             })
         end)

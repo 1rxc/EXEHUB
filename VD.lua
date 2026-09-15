@@ -2631,7 +2631,11 @@ end
 
 local function isTwistOfFateObject(inst)
     if not inst then return false end
-    local name = (inst.Name or ""):lower()
+    local name = ""
+    local ok = pcall(function()
+        name = tostring(inst.Name or ""):lower()
+    end)
+    if not ok or not name then return false end
     if name:find("twist") or name:find("fate") or name:find("revolver") or name:find("handgun") or name:find("pistol") or name:find("firearm") then
         return true
     end
@@ -2660,26 +2664,11 @@ local function getTwistOfFate()
         end
     end
 
-    -- 3. Character Descendants (handles nested Models or Parts)
+    -- 3. Character Tool or Model (Equipped)
     if char then
-        for _, desc in ipairs(char:GetDescendants()) do
-            if (desc:IsA("Tool") or desc:IsA("Model")) and isTwistOfFateObject(desc) then
-                return desc, true
-            end
-        end
-    end
-
-    -- 4. Match via Live Inspector Engine
-    local liveItem = nil
-    if getPlayerEquippedItem then
-        pcall(function()
-            liveItem = getPlayerEquippedItem(LocalPlayer, false)
-        end)
-    end
-    if liveItem and isTwistOfFateObject({ Name = tostring(liveItem) }) then
-        if char then
-            for _, item in ipairs(char:GetChildren()) do
-                if item:IsA("Tool") then return item, true end
+        for _, child in ipairs(char:GetChildren()) do
+            if (child:IsA("Tool") or child:IsA("Model")) and isTwistOfFateObject(child) then
+                return child, true
             end
         end
     end
@@ -2734,39 +2723,7 @@ local function getActiveKiller()
     return nil, nil
 end
 
--- Safe Mouse.Hit hook on Mouse instance metatable only (bypasses game metatable, zero impact on core game scripts)
-pcall(function()
-    local mouse = LocalPlayer:GetMouse()
-    if mouse then
-        local mouseMt = getrawmetatable(mouse)
-        if mouseMt and setreadonly then
-            setreadonly(mouseMt, false)
-            local oldMouseIndex = mouseMt.__index
-            mouseMt.__index = newcclosure(function(self, key)
-                if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.SilentAim and Toggles.SilentAim.Value) then
-                    local gun, isEq = getTwistOfFate()
-                    if isEq then
-                        local _, killerChar = getActiveKiller()
-                        if killerChar then
-                            local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
-                                and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
-                                or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
-                            if targetPart then
-                                if key == "Hit" then
-                                    return CFrame.new(targetPart.Position)
-                                elseif key == "Target" then
-                                    return targetPart
-                                end
-                            end
-                        end
-                    end
-                end
-                return oldMouseIndex(self, key)
-            end)
-            setreadonly(mouseMt, true)
-        end
-    end
-end)
+-- 100% Hit Chance & Aim To Killer: Driven by frame-rate independent camera tracking & character alignment (zero metatable hook, zero stack recursion)
 
 local function isAttacker(player, char, track)
     if not player and not char then return false end
@@ -3282,8 +3239,11 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
     if lockMode == "Always When Equipped" then
         shouldAim = true
     else
-        local isRmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-        local isLmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        local isRmb, isLmb = false, false
+        pcall(function()
+            isRmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            isLmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        end)
         if isRmb or isLmb then
             shouldAim = true
         else
@@ -4144,12 +4104,6 @@ TwistOfFateGroupBox:AddToggle("AimToKiller", {
 twistStatusLabel = TwistOfFateGroupBox:AddLabel("Twist of Fate: Checking...")
 
 TwistOfFateGroupBox:AddDivider()
-
-TwistOfFateGroupBox:AddToggle("SilentAim", {
-    Text = "Silent Aim (100% Hit Chance)",
-    Default = true,
-    Tooltip = "Directs mouse raycasts, hit positions, and bullet trajectories directly into the Killer's hitbox, guaranteeing 100% shot accuracy.",
-})
 
 TwistOfFateGroupBox:AddToggle("SmoothAim", {
     Text = "100% Smooth Aim Tracking",

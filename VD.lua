@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9a (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9b (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Server | Optimize | Settings
 
@@ -87,7 +87,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9a",
+    Footer = "VD 2.9b",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -638,6 +638,11 @@ local LiveUIGroupBox = Tabs.Parry:AddGroupbox({
 local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
     Side = "Right",
     Name = "Auto Parry (Parrying Dagger)",
+})
+
+local TwistOfFateGroupBox = Tabs.Parry:AddGroupbox({
+    Side = "Right",
+    Name = "Aim to Killer (Twist of Fate)",
 })
 
 -- Inside Server Tab: Quick Hop (Left) and Server Browser (Right)
@@ -1714,6 +1719,38 @@ pcall(function()
                     end
                 end
             end
+
+            -- Silent Aim Hook for Twist of Fate (100% Hit Chance)
+            if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.SilentAim and Toggles.SilentAim.Value) then
+                local gun, isEq = getTwistOfFate()
+                if isEq then
+                    local _, killerChar = getActiveKiller()
+                    if killerChar then
+                        local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
+                            and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
+                            or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
+
+                        if targetPart then
+                            -- 1. Raycast redirect
+                            if (method == "Raycast" or method == "raycast") and self == Workspace then
+                                local args = {...}
+                                if #args >= 2 and typeof(args[1]) == "Vector3" and typeof(args[2]) == "Vector3" then
+                                    local origin = args[1]
+                                    local dir = (targetPart.Position - origin).Unit * 1000
+                                    args[2] = dir
+                                    return oldNamecall(self, unpack(args))
+                                end
+                            end
+
+                            -- 2. FindPartOnRay redirect
+                            if (method == "FindPartOnRay" or method == "FindPartOnRayWithIgnoreList" or method == "FindPartOnRayWithWhitelist") and self == Workspace then
+                                return targetPart, targetPart.Position, Vector3.new(0, 1, 0), Enum.Material.Plastic
+                            end
+                        end
+                    end
+                end
+            end
+
             return oldNamecall(self, ...)
         end))
     end
@@ -1743,6 +1780,58 @@ local function hookStunRemotes()
 end
 
 task.defer(hookStunRemotes)
+
+-- Mouse.Hit Silent Aim Hook for 100% Shot Accuracy on Twist of Fate
+pcall(function()
+    local gmt = getrawmetatable(game)
+    if gmt and setreadonly then
+        setreadonly(gmt, false)
+        local oldIndex = gmt.__index
+        gmt.__index = newcclosure(function(self, key)
+            if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.SilentAim and Toggles.SilentAim.Value) then
+                local gun, isEq = getTwistOfFate()
+                if isEq then
+                    local _, killerChar = getActiveKiller()
+                    if killerChar then
+                        local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
+                            and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
+                            or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
+                        if targetPart then
+                            if key == "Hit" then
+                                return CFrame.new(targetPart.Position)
+                            elseif key == "Target" then
+                                return targetPart
+                            end
+                        end
+                    end
+                end
+            end
+            return oldIndex(self, key)
+        end)
+        setreadonly(gmt, true)
+    end
+end)
+
+-- Anti-Misfire Hook: 100% Fire Chance (forces weapon RNG checks to roll success)
+pcall(function()
+    if hookfunction then
+        local oldMathRandom
+        oldMathRandom = hookfunction(math.random, newcclosure(function(...)
+            local args = {...}
+            if not checkcaller() and (Toggles.AimToKiller and Toggles.AimToKiller.Value) and (Toggles.AntiMisfire and Toggles.AntiMisfire.Value) then
+                local _, isEq = getTwistOfFate()
+                if isEq then
+                    if #args == 0 then
+                        return 0.05 -- Less than 0.60 (guaranteed fire)
+                    elseif #args == 2 and args[1] == 1 and args[2] == 100 then
+                        return 1 -- 1 out of 100 is <= 60%
+                    end
+                end
+            end
+            return oldMathRandom(...)
+        end))
+    end
+end)
 
 -- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
@@ -2620,7 +2709,113 @@ local function getParryingDagger()
         end
     end
 
+    -- 6. Dagger not found anywhere
     return nil, false
+end
+
+local function isTwistOfFateObject(inst)
+    if not inst then return false end
+    local name = (inst.Name or ""):lower()
+    if name:find("twist") or name:find("fate") or name:find("revolver") or name:find("handgun") or name:find("pistol") or name:find("firearm") then
+        return true
+    end
+    return false
+end
+
+local function getTwistOfFate()
+    local char = LocalPlayer.Character
+    local bp = LocalPlayer:FindFirstChildOfClass("Backpack")
+
+    -- 1. Character Tool (Equipped)
+    if char then
+        for _, child in ipairs(char:GetChildren()) do
+            if child:IsA("Tool") and isTwistOfFateObject(child) then
+                return child, true
+            end
+        end
+    end
+
+    -- 2. Backpack Tool (In inventory)
+    if bp then
+        for _, child in ipairs(bp:GetChildren()) do
+            if child:IsA("Tool") and isTwistOfFateObject(child) then
+                return child, false
+            end
+        end
+    end
+
+    -- 3. Character Descendants (handles nested Models or Parts)
+    if char then
+        for _, desc in ipairs(char:GetDescendants()) do
+            if (desc:IsA("Tool") or desc:IsA("Model")) and isTwistOfFateObject(desc) then
+                return desc, true
+            end
+        end
+    end
+
+    -- 4. Match via Live Inspector Engine
+    local liveItem = nil
+    if getPlayerEquippedItem then
+        pcall(function()
+            liveItem = getPlayerEquippedItem(LocalPlayer, false)
+        end)
+    end
+    if liveItem and isTwistOfFateObject({ Name = tostring(liveItem) }) then
+        if char then
+            for _, item in ipairs(char:GetChildren()) do
+                if item:IsA("Tool") then return item, true end
+            end
+        end
+    end
+
+    return nil, false
+end
+
+local function getActiveKiller()
+    -- 1. Check all players for verified killer
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and isKiller(player) then
+            local char = player.Character
+            if char then
+                local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+                if root then
+                    return player, char
+                end
+            end
+        end
+    end
+
+    -- 2. Check tags or attributes
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local char = player.Character
+            if (char:GetAttribute("IsKiller") == true or char:GetAttribute("Killer") == true or CollectionService:HasTag(char, "Killer")) then
+                local root = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+                if root then
+                    return player, char
+                end
+            end
+        end
+    end
+
+    -- 3. Check for killer weapons
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local char = player.Character
+            for _, item in ipairs(char:GetChildren()) do
+                if item:IsA("Tool") then
+                    local n = item.Name:lower()
+                    for _, wep in ipairs(KnownKillerWeapons) do
+                        if n:find(wep.key) then
+                            return player, char
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil, nil
 end
 
 local function isAttacker(player, char, track)
@@ -3111,6 +3306,61 @@ connections[#connections + 1] = RunService.Stepped:Connect(function()
                     part.CanCollide = false
                 end
             end
+        end
+    end
+end)
+
+-- Twist of Fate Aim Lock Render Loop (100% Aim to Killer)
+connections[#connections + 1] = RunService.RenderStepped:Connect(function()
+    if not (Toggles.AimToKiller and Toggles.AimToKiller.Value) then return end
+
+    local gun, isEq = getTwistOfFate()
+    if not isEq then return end
+
+    local _, killerChar = getActiveKiller()
+    if not killerChar then return end
+
+    local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
+        and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
+        or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
+
+    if not targetPart then return end
+
+    local lockMode = Options.AimLockMode and Options.AimLockMode.Value or "When Aiming / Firing"
+    local shouldAim = false
+
+    if lockMode == "Always When Equipped" then
+        shouldAim = true
+    else
+        local isRmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        local isLmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        if isRmb or isLmb then
+            shouldAim = true
+        else
+            local myChar = LocalPlayer.Character
+            if myChar then
+                if myChar:GetAttribute("Aiming") == true
+                    or myChar:GetAttribute("IsAiming") == true
+                    or myChar:GetAttribute("Aim") == true
+                    or myChar:GetAttribute("Shooting") == true then
+                    shouldAim = true
+                end
+            end
+        end
+    end
+
+    if shouldAim then
+        local cam = Workspace.CurrentCamera
+        if cam then
+            local camPos = cam.CFrame.Position
+            local targetPos = targetPart.Position
+            cam.CFrame = CFrame.new(camPos, targetPos)
+        end
+        local myChar = LocalPlayer.Character
+        local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+        if myRoot then
+            local flatTarget = Vector3.new(targetPart.Position.X, myRoot.Position.Y, targetPart.Position.Z)
+            myRoot.CFrame = CFrame.new(myRoot.Position, flatTarget)
         end
     end
 end)
@@ -3838,7 +4088,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9a)",
+                        Title = "Auto Parry (VD 2.9b)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3846,7 +4096,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9a)",
+                        Title = "Auto Parry (VD 2.9b)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3892,6 +4142,72 @@ AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
     end
     executeParry("MANUAL_TEST")
 end)
+
+----------------------------------------------------------------------
+-- UI ELEMENTS (TWIST OF FATE - AIM TO KILLER & 100% HIT)
+----------------------------------------------------------------------
+
+local twistStatusLabel = nil
+
+TwistOfFateGroupBox:AddToggle("AimToKiller", {
+    Text = "Aim to Killer (Twist of Fate)",
+    Default = false,
+    Tooltip = "100% Hit Chance: When Twist of Fate (Revolver) is used or equipped, automatically locks aim onto the Killer and directs all shots directly into the Killer.",
+    Callback = function(val)
+        if val then
+            local gun = getTwistOfFate()
+            if not gun then
+                pcall(function()
+                    Library:Notify({
+                        Title = "Aim to Killer (VD 2.9b)",
+                        Description = "Notice: Twist of Fate not found in inventory! Aim will activate automatically when you obtain Twist of Fate.",
+                        Time = 5,
+                    })
+                end)
+            else
+                pcall(function()
+                    Library:Notify({
+                        Title = "Aim to Killer (VD 2.9b)",
+                        Description = "Twist of Fate active! 100% Aim Lock and Hit Chance engaged on Killer!",
+                        Time = 4,
+                    })
+                end)
+            end
+        end
+    end,
+})
+
+twistStatusLabel = TwistOfFateGroupBox:AddLabel("Twist of Fate: Checking...")
+
+TwistOfFateGroupBox:AddDivider()
+
+TwistOfFateGroupBox:AddToggle("SilentAim", {
+    Text = "Silent Aim (100% Hit Chance)",
+    Default = true,
+    Tooltip = "Directs mouse raycasts, hit positions, and bullet trajectories directly into the Killer's hitbox, guaranteeing 100% shot accuracy.",
+})
+
+TwistOfFateGroupBox:AddToggle("AntiMisfire", {
+    Text = "100% Fire Chance (Anti-Misfire)",
+    Default = true,
+    Tooltip = "Bypasses the 40% misfire gamble by forcing firearm client RNG to always roll success, ensuring the gun fires 100% of the time.",
+})
+
+TwistOfFateGroupBox:AddDropdown("AimTargetPart", {
+    Values = { "Torso (100% Hitbox)", "Head" },
+    Default = "Torso (100% Hitbox)",
+    Multi = false,
+    Text = "Target Hitbox",
+    Tooltip = "Select which hitbox to aim at. Torso is recommended for maximum strike reliability.",
+})
+
+TwistOfFateGroupBox:AddDropdown("AimLockMode", {
+    Values = { "When Aiming / Firing", "Always When Equipped" },
+    Default = "When Aiming / Firing",
+    Multi = false,
+    Text = "Aim Lock Mode",
+    Tooltip = "When Aiming / Firing locks onto the killer whenever you hold Right Click or fire. Always When Equipped keeps camera locked while the weapon is out.",
+})
 
 ----------------------------------------------------------------------
 -- UI ELEMENTS (SERVER TAB - 0 TO 1 PLAYER SERVER LIST & HOPPER)
@@ -4457,6 +4773,20 @@ task.spawn(function()
                 updateLiveInspector()
             end
 
+            -- Update Twist of Fate Status
+            if twistStatusLabel and twistStatusLabel.SetText then
+                local gun, isEquipped = getTwistOfFate()
+                if gun then
+                    if isEquipped then
+                        twistStatusLabel:SetText("Twist of Fate: Equipped & Ready (Aim Active)")
+                    else
+                        twistStatusLabel:SetText("Twist of Fate: In Backpack (Ready)")
+                    end
+                else
+                    twistStatusLabel:SetText("Twist of Fate: Not in Inventory")
+                end
+            end
+
             -- Update Parrying Dagger Status
             if daggerStatusLabel and daggerStatusLabel.SetText then
                 local tool, isEquipped = getParryingDagger()
@@ -4730,8 +5060,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9a Loaded Successfully!",
+        Description = "VD 2.9b Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9a Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9b Loaded Successfully! Enjoy!")
 end)

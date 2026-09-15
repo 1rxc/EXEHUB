@@ -2,12 +2,24 @@
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Server | Optimize | Settings
 
+local getgenv = getgenv or function() return _G end
+local env = getgenv()
+env.__EXEHUB_CACHE = env.__EXEHUB_CACHE or {}
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local function safeLoad(path)
+    if env.__EXEHUB_CACHE[path] then
+        return loadstring(env.__EXEHUB_CACHE[path])()
+    end
     local s, res = pcall(game.HttpGet, game, repo .. path)
-    if s and res and #res > 50 then return loadstring(res)() end
+    if s and res and #res > 50 then
+        env.__EXEHUB_CACHE[path] = res
+        return loadstring(res)()
+    end
     local s2, res2 = pcall(game.HttpGet, game, "https://cdn.jsdelivr.net/gh/deividcomsono/Obsidian@main/" .. path)
-    if s2 and res2 and #res2 > 50 then return loadstring(res2)() end
+    if s2 and res2 and #res2 > 50 then
+        env.__EXEHUB_CACHE[path] = res2
+        return loadstring(res2)()
+    end
     error("[EXE HUB] Failed to load " .. tostring(path))
 end
 local Library = safeLoad("Library.lua")
@@ -766,7 +778,7 @@ end
 
 local function updatePlayerHighlight(player, hl)
     if not hl or not hl.Parent then return end
-    hl.Enabled = Toggles.HighlightPlayers.Value
+    hl.Enabled = (Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value == true)
 
     if isKiller(player) then
         hl.FillColor = Options.KillerColor.Value
@@ -781,8 +793,27 @@ local function updatePlayerHighlight(player, hl)
 end
 
 local function updateAllPlayerHighlights()
-    for player, hl in pairs(playerHighlights) do
-        updatePlayerHighlight(player, hl)
+    local isEnabled = (Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value == true)
+    if not isEnabled then
+        for player, hl in pairs(playerHighlights) do
+            if hl and hl.Parent then
+                hl.Enabled = false
+            end
+        end
+        return
+    end
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer or (Toggles.IncludeLocalPlayer and Toggles.IncludeLocalPlayer.Value) then
+            if player.Character then
+                local hl = playerHighlights[player]
+                if not hl or not hl.Parent then
+                    applyPlayerHighlight(player, player.Character)
+                else
+                    updatePlayerHighlight(player, hl)
+                end
+            end
+        end
     end
 end
 
@@ -797,10 +828,16 @@ local function applyPlayerHighlight(player, character)
         playerHighlights[player] = nil
     end
 
+    local isEnabled = (Toggles.HighlightPlayers and Toggles.HighlightPlayers.Value == true)
+    if not isEnabled then
+        return
+    end
+
     local hl = Instance.new("Highlight")
     hl.Name = "VD_PlayerESP"
-    hl.Adornee = character
+    hl.Enabled = false
     hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    hl.Adornee = character
     hl.Parent = character
 
     playerHighlights[player] = hl
@@ -1039,8 +1076,34 @@ local function updateGenHighlight(hl, genInstance)
 end
 
 local function updateAllGeneratorHighlights()
-    for genInstance, hl in pairs(generatorHighlights) do
-        updateGenHighlight(hl, genInstance)
+    local isGenEnabled = (Toggles.HighlightGenerators and Toggles.HighlightGenerators.Value == true)
+    if not isGenEnabled then
+        for genInstance, hl in pairs(generatorHighlights) do
+            if hl and hl.Parent then
+                hl.Enabled = false
+            end
+        end
+        return
+    end
+
+    for genInstance in pairs(trackedGenerators) do
+        if genInstance and genInstance.Parent then
+            local hl = generatorHighlights[genInstance]
+            if not hl or not hl.Parent then
+                if not isGeneratorFixed(genInstance) then
+                    local newHl = Instance.new("Highlight")
+                    newHl.Name = "VD_GenESP"
+                    newHl.Enabled = false
+                    newHl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    newHl.Adornee = genInstance
+                    newHl.Parent = genInstance
+                    generatorHighlights[genInstance] = newHl
+                    updateGenHighlight(newHl, genInstance)
+                end
+            else
+                updateGenHighlight(hl, genInstance)
+            end
+        end
     end
 end
 
@@ -1051,18 +1114,32 @@ local function registerGenerator(genInstance)
 
     trackedGenerators[genInstance] = true
 
-    local hl = Instance.new("Highlight")
-    hl.Name = "VD_GenESP"
-    hl.Adornee = genInstance
-    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    hl.Parent = genInstance
-
-    generatorHighlights[genInstance] = hl
-    updateGenHighlight(hl, genInstance)
+    local isGenEnabled = (Toggles.HighlightGenerators and Toggles.HighlightGenerators.Value == true)
+    if isGenEnabled and not isGeneratorFixed(genInstance) then
+        local hl = Instance.new("Highlight")
+        hl.Name = "VD_GenESP"
+        hl.Enabled = false
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Adornee = genInstance
+        hl.Parent = genInstance
+        generatorHighlights[genInstance] = hl
+        updateGenHighlight(hl, genInstance)
+    end
 
     -- Real-time reactive updates: listen for changes on attributes and prompts
     local function onGenStateChanged()
-        updateGenHighlight(hl, genInstance)
+        if generatorHighlights[genInstance] then
+            updateGenHighlight(generatorHighlights[genInstance], genInstance)
+        elseif Toggles.HighlightGenerators and Toggles.HighlightGenerators.Value and not isGeneratorFixed(genInstance) then
+            local hl = Instance.new("Highlight")
+            hl.Name = "VD_GenESP"
+            hl.Enabled = false
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.Adornee = genInstance
+            hl.Parent = genInstance
+            generatorHighlights[genInstance] = hl
+            updateGenHighlight(hl, genInstance)
+        end
     end
 
     genInstance.AttributeChanged:Connect(onGenStateChanged)
@@ -1099,12 +1176,60 @@ local function registerGenerator(genInstance)
     end)
 end
 
+local isScanningGenerators = false
 local function scanGenerators()
-    for _, descendant in ipairs(Workspace:GetDescendants()) do
-        if isGenerator(descendant) then
-            registerGenerator(descendant)
+    if isScanningGenerators then return end
+    isScanningGenerators = true
+
+    task.spawn(function()
+        -- 1. Fast Tagged Discovery (Instant O(1) indexed lookup)
+        pcall(function()
+            for _, tag in ipairs({"Generator", "Gen", "Objective", "Interactable"}) do
+                for _, obj in ipairs(CollectionService:GetTagged(tag)) do
+                    if isGenerator(obj) then
+                        registerGenerator(obj)
+                    end
+                end
+            end
+        end)
+
+        -- 2. Fast Folder Discovery (Direct map folders)
+        for _, folderName in ipairs({"Map", "Generators", "Interactions", "Objectives", "Props", "Spawns", "Interactables"}) do
+            local f = Workspace:FindFirstChild(folderName)
+            if f then
+                for _, desc in ipairs(f:GetDescendants()) do
+                    if isGenerator(desc) then
+                        registerGenerator(desc)
+                    end
+                end
+            end
         end
-    end
+
+        -- 3. Chunked Workspace Scan (Yields every 200 items to preserve 200+ FPS with zero hitch)
+        local count = 0
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if not (child:IsA("Terrain") or child:IsA("Camera") or child:IsA("Player") or (child:IsA("Folder") and (child.Name == "Characters" or child.Name == "Players"))) then
+                if isGenerator(child) then
+                    registerGenerator(child)
+                else
+                    pcall(function()
+                        for _, desc in ipairs(child:GetDescendants()) do
+                            if isGenerator(desc) then
+                                registerGenerator(desc)
+                            end
+                            count = count + 1
+                            if count % 200 == 0 then
+                                task.wait()
+                            end
+                        end
+                    end)
+                end
+            end
+        end
+
+        updateAllGeneratorHighlights()
+        isScanningGenerators = false
+    end)
 end
 
 ----------------------------------------------------------------------
@@ -1613,7 +1738,7 @@ local function hookStunRemotes()
     end)
 end
 
-hookStunRemotes()
+task.defer(hookStunRemotes)
 
 -- 3. Targeted Frame Loop: Breaks genuine stuns only and guarantees clicks/interactions stay active
 connections[#connections + 1] = RunService.Heartbeat:Connect(function()
@@ -2930,8 +3055,10 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     end
 end
 
+local boundCharacters = {}
 bindCombatListeners = function(player, char)
     if player == LocalPlayer or not char then return end
+    if boundCharacters[char] then return end
 
     local animator = char:FindFirstChildWhichIsA("Animator", true)
     if not animator then
@@ -2953,8 +3080,12 @@ bindCombatListeners = function(player, char)
         return
     end
 
-    if combatBoundAnimators[animator] then return end
+    if combatBoundAnimators[animator] then
+        boundCharacters[char] = true
+        return
+    end
     combatBoundAnimators[animator] = true
+    boundCharacters[char] = true
 
     local conn = animator.AnimationPlayed:Connect(function(track)
         checkAndTriggerParry(char, player, track)
@@ -2998,11 +3129,9 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
             if char:GetAttribute("Speed") ~= nil and char:GetAttribute("Speed") ~= targetSpeed then
                 pcall(function() char:SetAttribute("Speed", targetSpeed) end)
             end
-        else
+        elseif hum and hum.WalkSpeed > defaultSpeed then
             -- When Speed Adjust is OFF: strictly ensure player speed stays at default
-            if hum and hum.WalkSpeed > defaultSpeed then
-                hum.WalkSpeed = defaultSpeed
-            end
+            hum.WalkSpeed = defaultSpeed
             if char:GetAttribute("Speed") ~= nil and char:GetAttribute("Speed") ~= defaultSpeed then
                 pcall(function() char:SetAttribute("Speed", defaultSpeed) end)
             end
@@ -4179,21 +4308,32 @@ applyNetworkOptimizations(true)
 -- EVENT INITIALIZATION
 ----------------------------------------------------------------------
 
-for _, player in ipairs(Players:GetPlayers()) do
-    setupPlayer(player)
-end
+-- LocalPlayer setup runs immediately for instant local responsiveness
+setupPlayer(LocalPlayer)
 
 connections[#connections + 1] = Players.PlayerAdded:Connect(setupPlayer)
 connections[#connections + 1] = Players.PlayerRemoving:Connect(function(player)
+    if player.Character then
+        boundCharacters[player.Character] = nil
+    end
     if playerHighlights[player] then
         pcall(function() playerHighlights[player]:Destroy() end)
         playerHighlights[player] = nil
     end
 end)
 
--- Non-blocking generator scan: loads in background so script executes with 0ms freeze
+-- Defer other players setup so execution frame has ZERO stutter
+task.defer(function()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            setupPlayer(player)
+        end
+    end
+end)
+
+-- Non-blocking generator scan: gently loads in background with chunked yielding
 task.spawn(function()
-    task.wait(0.3)
+    task.wait(0.5)
     scanGenerators()
 end)
 
@@ -4418,6 +4558,7 @@ Library:OnUnload(function()
     end)
     table.clear(parriedTracks)
     table.clear(combatBoundAnimators)
+    table.clear(boundCharacters)
 end)
 
 ----------------------------------------------------------------------
@@ -4436,37 +4577,38 @@ SaveManager:SetFolder("ViolenceDistrict/configs")
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
 ThemeManager:ApplyToTab(Tabs["UI Settings"])
 
--- Auto-Load Saved Configuration on execution
-pcall(function()
-    SaveManager:CheckFolderTree()
-    local defaultCfgPath = "ViolenceDistrict/configs/settings/default.json"
-    if isfile and isfile(defaultCfgPath) then
-        SaveManager:Load("default")
-    else
-        SaveManager:LoadAutoloadConfig()
-    end
-
-    -- Sync text inputs and sliders after loading config
-    task.delay(0.2, function()
-        pcall(function()
-            if Options.CustomSpeedInput and Options.SpeedValue then
-                local speedNum = tonumber(Options.CustomSpeedInput.Value)
-                if speedNum and speedNum <= 120 and Options.SpeedValue.Value ~= speedNum then
-                    Options.SpeedValue:SetValue(speedNum)
+-- Auto-Load Saved Configuration asynchronously so script finishes executing instantly with 0ms freeze
+task.defer(function()
+    pcall(function()
+        SaveManager:CheckFolderTree()
+        local defaultCfgPath = "ViolenceDistrict/configs/settings/default.json"
+        if isfile and isfile(defaultCfgPath) then
+            SaveManager:Load("default")
+        else
+            SaveManager:LoadAutoloadConfig()
+        end
+        -- Sync text inputs and sliders after loading config
+        task.delay(0.2, function()
+            pcall(function()
+                if Options.CustomSpeedInput and Options.SpeedValue then
+                    local speedNum = tonumber(Options.CustomSpeedInput.Value)
+                    if speedNum and speedNum <= 120 and Options.SpeedValue.Value ~= speedNum then
+                        Options.SpeedValue:SetValue(speedNum)
+                    end
                 end
-            end
-            if Options.CustomFlySpeedInput and Options.FlySpeed then
-                local flyNum = tonumber(Options.CustomFlySpeedInput.Value)
-                if flyNum and flyNum <= 150 and Options.FlySpeed.Value ~= flyNum then
-                    Options.FlySpeed:SetValue(flyNum)
+                if Options.CustomFlySpeedInput and Options.FlySpeed then
+                    local flyNum = tonumber(Options.CustomFlySpeedInput.Value)
+                    if flyNum and flyNum <= 150 and Options.FlySpeed.Value ~= flyNum then
+                        Options.FlySpeed:SetValue(flyNum)
+                    end
                 end
-            end
-            if Options.CustomFOVInput and Options.FOVValue then
-                local fovNum = tonumber(Options.CustomFOVInput.Value)
-                if fovNum and fovNum >= 30 and fovNum <= 130 and Options.FOVValue.Value ~= fovNum then
-                    Options.FOVValue:SetValue(fovNum)
+                if Options.CustomFOVInput and Options.FOVValue then
+                    local fovNum = tonumber(Options.CustomFOVInput.Value)
+                    if fovNum and fovNum >= 30 and fovNum <= 130 and Options.FOVValue.Value ~= fovNum then
+                        Options.FOVValue:SetValue(fovNum)
+                    end
                 end
-            end
+            end)
         end)
     end)
 end)

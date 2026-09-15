@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9.3 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.5 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -73,7 +73,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.3",
+    Footer = "VD 2.9.5",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1321,7 +1321,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.3 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.5 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2881,8 +2881,8 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
         lungeBonus = math.max(lungeBonus, 3.5)
     end
 
-    -- EARLY INTERCEPT: Minimum 17.5 studs reach ensures attacks are parried at swing startup, not point-blank!
-    local effectiveMaxDist = math.max(sliderDist + lungeBonus, 17.5)
+    -- EARLY INTERCEPT: 22.0 studs reach ensures attacks are parried at swing startup, before damage connects!
+    local effectiveMaxDist = math.max(sliderDist + lungeBonus, 22.0)
     if flatDist > effectiveMaxDist then
         return -- Killer is out of reach; attack will hit empty air!
     end
@@ -3691,7 +3691,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.3)",
+                        Title = "Auto Parry (VD 2.9.5)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3699,7 +3699,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.3)",
+                        Title = "Auto Parry (VD 2.9.5)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3776,7 +3776,7 @@ local function applyNetworkOptimizations(enable)
             settings().Network.ReceiveRate = 120
             
             -- 3. Disable Environmental Throttling (Eliminates packet throttling on background objects)
-            -- 4. Maximum FPS Cap (executor level, zero stutter, keep 200+ FPS)
+            -- 4. Maximum FPS Cap (executor level, zero stutter, preserve 200+ FPS)
             pcall(function()
                 if setfpscap then setfpscap(0) end
                 if set_fps_cap then set_fps_cap(0) end
@@ -4215,8 +4215,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.3 Loaded Successfully!",
+        Description = "VD 2.9.5 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.3 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.5 Loaded Successfully! Enjoy!")
 end)

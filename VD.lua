@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9.8 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.9 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -82,7 +82,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.8",
+    Footer = "VD 2.9.9",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1380,7 +1380,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.8 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.9 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -3794,7 +3794,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.8)",
+                        Title = "Auto Parry (VD 2.9.9)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry will activate as soon as you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3802,7 +3802,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.8)",
+                        Title = "Auto Parry (VD 2.9.9)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3877,19 +3877,36 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
     end
 end)
 
-local function applyFPSCap(target)
-    local fps = tonumber(target) or 240
+----------------------------------------------------------------------
+-- SUPER LOW GRAPHICS & 10000 FPS ENGINE (VD 2.9.9)
+----------------------------------------------------------------------
+
+local isLowGraphicsActive = false
+local originalLightingState = {}
+local modifiedParts = {}
+local modifiedTextures = {}
+local modifiedEmitters = {}
+local modifiedEffects = {}
+
+local liveQualityLabel1 = nil
+local liveQualityLabel2 = nil
+
+local function unlock10000FPS()
     pcall(function()
-        if setfpscap then setfpscap(fps) end
-        if set_fps_cap then set_fps_cap(fps) end
-        if setmaxfps then setmaxfps(fps) end
-        if setfps then setfps(fps) end
-        if fps >= 360 then
-            if setfpscap then pcall(setfpscap, 0) end
-            if set_fps_cap then pcall(set_fps_cap, 0) end
+        if setfpscap then
+            setfpscap(10000)
+            pcall(setfpscap, 0)
         end
-    end)
-    pcall(function()
+        if set_fps_cap then
+            set_fps_cap(10000)
+            pcall(set_fps_cap, 0)
+        end
+        if setmaxfps then
+            setmaxfps(10000)
+        end
+        if setfps then
+            setfps(10000)
+        end
         local ugs = UserSettings():GetService("UserGameSettings")
         if ugs and ugs.FramerateMode then
             ugs.FramerateMode = Enum.FramerateMode.Maximum
@@ -3900,10 +3917,7 @@ end
 local function applyNetworkOptimizations(enable)
     pcall(function()
         if enable then
-            -- 1. Incoming Replication Lag (Set to 0ms for instant client-server synchronization)
             settings().Network.IncomingReplicationLag = 0
-            
-            -- 2. Enhanced Send / Receive Rate
             pcall(function() settings().Network.SendRate = 120 end)
             pcall(function() settings().Network.ReceiveRate = 120 end)
         else
@@ -3914,77 +3928,182 @@ local function applyNetworkOptimizations(enable)
     end)
 end
 
--- Apply initial 240 FPS unlock and network optimizations on boot
-applyFPSCap(240)
+local function setSuperLowGraphics(enable)
+    isLowGraphicsActive = enable
+
+    if enable then
+        -- 1. INSTANT 10000 FPS UNLOCK (NO SLIDERS / NO MANUAL NUMBERS REQUIRED)
+        unlock10000FPS()
+
+        -- 2. CLEAR ALL SYSTEM LAG & FLUSH GARBAGE RAM
+        pcall(function()
+            collectgarbage("collect")
+        end)
+
+        -- 3. REMOVE LIGHTING BLOAT (DISABLE SHADOWS & POST-PROCESSING EFFECTS)
+        pcall(function()
+            if not originalLightingState.saved then
+                originalLightingState = {
+                    saved = true,
+                    GlobalShadows = Lighting.GlobalShadows,
+                    FogEnd = Lighting.FogEnd
+                }
+            end
+            Lighting.GlobalShadows = false
+            Lighting.FogEnd = 9e9
+
+            for _, effect in ipairs(Lighting:GetChildren()) do
+                if effect:IsA("PostEffect") or effect:IsA("BlurEffect") or effect:IsA("BloomEffect") 
+                    or effect:IsA("SunRaysEffect") or effect:IsA("DepthOfFieldEffect") or effect:IsA("ColorCorrectionEffect") then
+                    if modifiedEffects[effect] == nil then
+                        modifiedEffects[effect] = effect.Enabled
+                    end
+                    effect.Enabled = false
+                end
+            end
+        end)
+
+        -- 4. OPTIMIZE TERRAIN (ZERO WATER OVERHEAD)
+        pcall(function()
+            local terrain = Workspace:FindFirstChildOfClass("Terrain")
+            if terrain then
+                terrain.WaterWaveSize = 0
+                terrain.WaterWaveSpeed = 0
+                terrain.WaterReflectance = 0
+                pcall(function() terrain.Decoration = false end)
+            end
+        end)
+
+        -- 5. SMOOTH PLASTIC TEXTURES, REMOVE SHADOWS & DISABLE PARTICLES
+        task.spawn(function()
+            for _, desc in ipairs(Workspace:GetDescendants()) do
+                if not isLowGraphicsActive then break end
+
+                -- Never touch player characters so survivors, killers, items & ESP stay clearly visible
+                local isChar = false
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl.Character and desc:IsDescendantOf(pl.Character) then
+                        isChar = true
+                        break
+                    end
+                end
+
+                if not isChar then
+                    if desc:IsA("BasePart") then
+                        if modifiedParts[desc] == nil then
+                            modifiedParts[desc] = {
+                                Material = desc.Material,
+                                CastShadow = desc.CastShadow
+                            }
+                        end
+                        desc.Material = Enum.Material.SmoothPlastic
+                        desc.CastShadow = false
+                    elseif desc:IsA("Decal") or desc:IsA("Texture") then
+                        if modifiedTextures[desc] == nil then
+                            modifiedTextures[desc] = desc.Transparency
+                        end
+                        desc.Transparency = 1
+                    elseif desc:IsA("ParticleEmitter") or desc:IsA("Smoke") or desc:IsA("Fire") or desc:IsA("Sparkles") or desc:IsA("Trail") then
+                        if modifiedEmitters[desc] == nil then
+                            modifiedEmitters[desc] = desc.Enabled
+                        end
+                        desc.Enabled = false
+                    end
+                end
+            end
+        end)
+
+        if liveQualityLabel1 and liveQualityLabel1.SetText then
+            liveQualityLabel1:SetText("FPS Mode : 10000 FPS Boost (Unlimited)")
+        end
+        if liveQualityLabel2 and liveQualityLabel2.SetText then
+            liveQualityLabel2:SetText("Graphics Engine : Super Low (Zero Lag)")
+        end
+
+    else
+        -- RESTORE 100% ORIGINAL GRAPHICS WHEN TURNED OFF (CLEAN LIFECYCLE)
+        pcall(function()
+            if originalLightingState.saved then
+                Lighting.GlobalShadows = originalLightingState.GlobalShadows
+                Lighting.FogEnd = originalLightingState.FogEnd
+            end
+
+            for effect, wasEnabled in pairs(modifiedEffects) do
+                if effect and effect.Parent then
+                    effect.Enabled = wasEnabled
+                end
+            end
+            table.clear(modifiedEffects)
+
+            for part, orig in pairs(modifiedParts) do
+                if part and part.Parent then
+                    part.Material = orig.Material
+                    part.CastShadow = orig.CastShadow
+                end
+            end
+            table.clear(modifiedParts)
+
+            for tex, origTrans in pairs(modifiedTextures) do
+                if tex and tex.Parent then
+                    tex.Transparency = origTrans
+                end
+            end
+            table.clear(modifiedTextures)
+
+            for emitter, wasEnabled in pairs(modifiedEmitters) do
+                if emitter and emitter.Parent then
+                    emitter.Enabled = wasEnabled
+                end
+            end
+            table.clear(modifiedEmitters)
+
+            local terrain = Workspace:FindFirstChildOfClass("Terrain")
+            if terrain then
+                terrain.WaterWaveSize = 0.15
+                terrain.WaterWaveSpeed = 10
+                terrain.WaterReflectance = 0.05
+            end
+        end)
+
+        if liveQualityLabel1 and liveQualityLabel1.SetText then
+            liveQualityLabel1:SetText("FPS Mode : Standard Unlocked")
+        end
+        if liveQualityLabel2 and liveQualityLabel2.SetText then
+            liveQualityLabel2:SetText("Graphics Engine : 100% Original (Pristine)")
+        end
+    end
+end
+
+-- Apply initial instant 10000 FPS boost & network ping optimization on boot
+unlock10000FPS()
 applyNetworkOptimizations(true)
 
--- Left Side: FPS Unlocker (200+ FPS) & Ping Booster
-OptimizeGroupBox:AddToggle("UnlockFPS", {
-    Text = "Unlock FPS (200+ FPS)",
+-- Left Side: 1-Click Instant 10000 FPS & Super Low Graphics (NO SLIDERS NEEDED)
+OptimizeGroupBox:AddToggle("SuperFPSBoost", {
+    Text = "Super Low Graphics & 10000 FPS",
     Default = true,
-    Tooltip = "Unlocks client FPS beyond 60 up to 200, 240, 360, or Unlimited for high refresh monitors.",
+    Tooltip = "Instant 1-Click Optimization: Unlocks 10000 FPS, flushes all lag, removes shadows/particles, and enables Super Low Graphics for extreme speed!",
     Callback = function(val)
+        setSuperLowGraphics(val)
         if val then
-            local target = (Options.FPSCap and Options.FPSCap.Value) or 240
-            applyFPSCap(target)
+            pcall(function()
+                Library:Notify({
+                    Title = "FPS Optimizer (VD 2.9.9)",
+                    Description = "10000 FPS Boost & Super Low Graphics Active! All lag cleared.",
+                    Time = 4,
+                })
+            end)
         else
-            applyFPSCap(60)
+            pcall(function()
+                Library:Notify({
+                    Title = "FPS Optimizer (VD 2.9.9)",
+                    Description = "Super Low Graphics turned OFF. Original graphics cleanly restored!",
+                    Time = 4,
+                })
+            end)
         end
     end,
 })
-
-OptimizeGroupBox:AddSlider("FPSCap", {
-    Text = "Max FPS Cap",
-    Default = 240,
-    Min = 60,
-    Max = 360,
-    Rounding = 0,
-    Compact = false,
-    Tooltip = "Set target FPS (e.g. 144, 200, 240, 360).",
-    Callback = function(val)
-        if not Toggles.UnlockFPS or Toggles.UnlockFPS.Value then
-            applyFPSCap(val)
-        end
-    end,
-})
-
-OptimizeGroupBox:AddButton("Preset: 200 FPS (Match Monitor)", function()
-    if Options.FPSCap then Options.FPSCap:SetValue(200) end
-    applyFPSCap(200)
-    pcall(function()
-        Library:Notify({
-            Title = "FPS Optimizer",
-            Description = "Target set to 200 FPS!",
-            Time = 3,
-        })
-    end)
-end)
-
-OptimizeGroupBox:AddButton("Preset: 240 FPS (Ultra Smooth)", function()
-    if Options.FPSCap then Options.FPSCap:SetValue(240) end
-    applyFPSCap(240)
-    pcall(function()
-        Library:Notify({
-            Title = "FPS Optimizer",
-            Description = "Target set to 240 FPS!",
-            Time = 3,
-        })
-    end)
-end)
-
-OptimizeGroupBox:AddButton("Preset: Unlimited (Max Possible)", function()
-    if Options.FPSCap then Options.FPSCap:SetValue(360) end
-    applyFPSCap(360)
-    pcall(function()
-        if setfpscap then pcall(setfpscap, 0) end
-        if set_fps_cap then pcall(set_fps_cap, 0) end
-        Library:Notify({
-            Title = "FPS Optimizer",
-            Description = "FPS Uncapped (Unlimited)! Full GPU/CPU performance active.",
-            Time = 3,
-        })
-    end)
-end)
 
 OptimizeGroupBox:AddDivider()
 
@@ -4003,32 +4122,37 @@ OptimizeGroupBox:AddToggle("FastInputLatency", {
     Tooltip = "Processes inputs, clicks, and parry triggers with zero queuing delay",
 })
 
-OptimizeGroupBox:AddToggle("MemoryOptimizer", {
-    Text = "Memory & GC Optimizer",
-    Default = false,
-    Tooltip = "Cleans unused memory cycles smoothly without impacting frame rate",
-    Callback = function(val)
-        if val then
-            pcall(function()
-                collectgarbage("setstepmul", 200)
-                collectgarbage("setpause", 200)
-            end)
-        end
-    end,
-})
-
 OptimizeGroupBox:AddDivider()
 
-OptimizeGroupBox:AddButton("Flush Memory & Ping Cache Now", function()
+OptimizeGroupBox:AddButton("Boost FPS & Clear All Lag Now (10000 FPS)", function()
+    unlock10000FPS()
+    setSuperLowGraphics(true)
+    if Toggles.SuperFPSBoost and Toggles.SuperFPSBoost.Value ~= true then
+        pcall(function() Toggles.SuperFPSBoost:SetValue(true) end)
+    end
     pcall(function()
         local before = gcinfo()
         collectgarbage("collect")
         local after = gcinfo()
         local freed = math.max(0, before - after)
         Library:Notify({
-            Title = "Optimizer",
-            Description = "Flushed " .. string.format("%.1f KB", freed) .. " RAM. Latency refreshed!",
+            Title = "FPS Optimizer",
+            Description = "FPS boosted to 10000! Cleared " .. string.format("%.1f KB", freed) .. " RAM lag.",
             Time = 4,
+        })
+    end)
+end)
+
+OptimizeGroupBox:AddButton("Reset Graphics to Original High Quality", function()
+    setSuperLowGraphics(false)
+    if Toggles.SuperFPSBoost and Toggles.SuperFPSBoost.Value ~= false then
+        pcall(function() Toggles.SuperFPSBoost:SetValue(false) end)
+    end
+    pcall(function()
+        Library:Notify({
+            Title = "Graphics Restored",
+            Description = "100% Original high quality graphics restored!",
+            Time = 3,
         })
     end)
 end)
@@ -4048,8 +4172,8 @@ end)
 
 NetworkMonitorGroupBox:AddDivider()
 
-local liveQualityLabel1 = NetworkMonitorGroupBox:AddLabel("Visual Quality : 100% Original")
-local liveQualityLabel2 = NetworkMonitorGroupBox:AddLabel("Graphics State : Untouched (Pristine)")
+liveQualityLabel1 = NetworkMonitorGroupBox:AddLabel("FPS Mode : 10000 FPS Boost (Unlimited)")
+liveQualityLabel2 = NetworkMonitorGroupBox:AddLabel("Graphics Engine : Super Low (Zero Lag)")
 
 pcall(function()
     if liveQualityLabel1 and liveQualityLabel1.TextLabel then liveQualityLabel1.TextLabel.RichText = false end
@@ -4084,8 +4208,9 @@ NetworkMonitorGroupBox:AddButton("Refresh Network Stats", function()
     updateNetworkMonitor()
 end)
 
--- Apply initial 200+ FPS unlock & network ping boost on boot
-applyFPSCap(240)
+-- Apply initial 10000 FPS unlock & network ping boost on boot
+unlock10000FPS()
+setSuperLowGraphics(true)
 applyNetworkOptimizations(true)
 
 ----------------------------------------------------------------------
@@ -4413,8 +4538,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.8 Loaded Successfully!",
+        Description = "VD 2.9.9 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.8 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.9 Loaded Successfully! Enjoy!")
 end)

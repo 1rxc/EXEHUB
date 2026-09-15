@@ -1,6 +1,6 @@
--- Violence District | EXE HUB Script VD 2.9.7 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.8a (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
--- Tabs: ESP | Automatic | Player | Camera | Parry | Vault | Optimize | Settings
+-- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local function safeLoad(path)
@@ -45,7 +45,6 @@ local VirtualUser = game:GetService("VirtualUser")
 local GuiService = game:GetService("GuiService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CollectionService = game:GetService("CollectionService")
-local ProximityPromptService = game:GetService("ProximityPromptService")
 local LocalPlayer = Players.LocalPlayer
 
 local Options = Library.Options
@@ -74,7 +73,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.7",
+    Footer = "VD 2.9.8a",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -236,7 +235,6 @@ local Tabs = {
     Player = Window:AddTab("Player"),
     Camera = Window:AddTab("Camera"),
     Parry = Window:AddTab("Parry"),
-    Vault = Window:AddTab("Vault"),
     Optimize = Window:AddTab("Optimize"),
     ["UI Settings"] = Window:AddTab("Settings"),
 }
@@ -627,17 +625,6 @@ local AutoParryGroupBox = Tabs.Parry:AddGroupbox({
     Name = "Auto Parry (Parrying Dagger)",
 })
 
--- Inside Vault Tab: Fast Vault (Left) and Information (Right)
-local VaultGroupBox = Tabs.Vault:AddGroupbox({
-    Side = "Left",
-    Name = "Fast Vault (Flowstate Effect)",
-})
-
-local VaultInfoGroupBox = Tabs.Vault:AddGroupbox({
-    Side = "Right",
-    Name = "Information & Status",
-})
-
 -- Inside Optimize Tab: Ping & MS Booster (Left) and Network Status (Right)
 local OptimizeGroupBox = Tabs.Optimize:AddGroupbox({
     Side = "Left",
@@ -839,206 +826,6 @@ local function bindLocalCharacterAntiStun(char)
     end)
 end
 
-----------------------------------------------------------------------
--- FAST VAULT SYSTEM (VD 2.9.7 - FLOWSTATE EFFECT: 50% - 70% QUICKER VAULT)
-----------------------------------------------------------------------
-
-local VaultKeywords = {
-    "vault", "vaulting", "fastvault", "slowvault", "medvault", "mediumvault",
-    "palletvault", "windowvault", "pallet_vault", "window_vault", "pallet_slide",
-    "palletslide", "slide", "hurdle", "mantle", "hopover", "jumpover",
-    "climbover", "climb_over", "obstacle_vault", "obstacle", "hop", "climb",
-    "pallet", "window", "flowstate"
-}
-
-local vaultStatusLabel = nil
-local lastVaultStartTime = 0
-local cachedVaultPromptState = false
-local lastVaultPromptCheckTick = 0
-local activeVaultTracks = {}
-
-local function getVaultSpeedMultiplier()
-    local pct = 60
-    if Options.VaultSpeedBoost and Options.VaultSpeedBoost.Value then
-        pct = Options.VaultSpeedBoost.Value
-    end
-    -- Clamped between 50% and 70% faster (multiplier 1.50x to 1.70x)
-    return 1 + (math.clamp(pct, 50, 70) / 100)
-end
-
--- Cached detection (0.2s debounce to prevent CPU frame drops on Heartbeat)
-local function isVaultPromptActive()
-    local now = tick()
-    if now - lastVaultPromptCheckTick < 0.2 then
-        return cachedVaultPromptState
-    end
-    lastVaultPromptCheckTick = now
-
-    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if pg then
-        for _, desc in ipairs(pg:GetDescendants()) do
-            if desc:IsA("TextLabel") or desc:IsA("TextButton") then
-                local txt = tostring(desc.Text or ""):upper()
-                if txt:find("VAULT") or txt:find("SLIDE") then
-                    if desc.Visible then
-                        local isVis = true
-                        local cur = desc.Parent
-                        while cur and cur:IsA("GuiObject") do
-                            if not cur.Visible then isVis = false break end
-                            cur = cur.Parent
-                        end
-                        if isVis then
-                            cachedVaultPromptState = true
-                            return true
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- Proximity / obstacle check in front of player (within 7 studs)
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if root then
-        local rayParams = RaycastParams.new()
-        rayParams.FilterDescendantsInstances = { char }
-        rayParams.FilterType = Enum.RaycastFilterType.Exclude
-        local look = root.CFrame.LookVector
-        local hit = Workspace:Raycast(root.Position, look * 7, rayParams)
-        if hit and hit.Instance then
-            local hitName = (hit.Instance.Name .. " " .. (hit.Instance.Parent and hit.Instance.Parent.Name or "")):lower()
-            if hitName:find("pallet") or hitName:find("vault") or hitName:find("window") or hitName:find("obstacle") or hitName:find("wood") then
-                cachedVaultPromptState = true
-                return true
-            end
-        end
-    end
-
-    cachedVaultPromptState = false
-    return false
-end
-
-local function isVaultAnimation(track)
-    if not track then return false end
-    if activeVaultTracks[track] then return true end
-
-    local tName = (track.Name or ""):lower()
-    local animId = ""
-    if track.Animation then
-        animId = tostring(track.Animation.AnimationId or ""):lower()
-        tName = tName .. " " .. (track.Animation.Name or ""):lower()
-    end
-    for _, kw in ipairs(VaultKeywords) do
-        if tName:find(kw) or animId:find(kw) then
-            activeVaultTracks[track] = true
-            track.Stopped:Once(function()
-                activeVaultTracks[track] = nil
-            end)
-            return true
-        end
-    end
-    -- Detect non-looped action animation started while VAULT prompt is visible on screen
-    if isVaultPromptActive() and track.Looped == false then
-        local prio = track.Priority
-        if prio == Enum.AnimationPriority.Action 
-            or prio == Enum.AnimationPriority.Action2 
-            or prio == Enum.AnimationPriority.Action3 
-            or prio == Enum.AnimationPriority.Action4 then
-            activeVaultTracks[track] = true
-            track.Stopped:Once(function()
-                activeVaultTracks[track] = nil
-            end)
-            return true
-        end
-    end
-    return false
-end
-
--- Accelerates the vault animation and traversal speed by 50% - 70% (like Flowstate perk)
-local function applyFastVaultFlowstate(track)
-    if not track then return end
-    local mult = getVaultSpeedMultiplier()
-    lastVaultStartTime = tick()
-
-    pcall(function()
-        if vaultStatusLabel then
-            local pct = math.floor((mult - 1) * 100)
-            vaultStatusLabel:SetText("Status: Vaulting +" .. tostring(pct) .. "% Quicker!")
-        end
-    end)
-
-    -- 1. Accelerate the animation track playback speed
-    pcall(function()
-        track:AdjustSpeed(mult)
-    end)
-
-    -- 2. Scale forward traversal momentum by the same 50% - 70% factor
-    task.spawn(function()
-        local char = LocalPlayer.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if not root or not hum then return end
-
-        local forwardDir = root.CFrame.LookVector
-        local flatForward = Vector3.new(forwardDir.X, 0, forwardDir.Z).Unit
-        local normalVaultSpeed = 16
-        local boostedSpeed = normalVaultSpeed * mult
-
-        while track.IsPlaying and (tick() - lastVaultStartTime < 1.0) do
-            if not (Toggles.FastVault and Toggles.FastVault.Value) then break end
-            pcall(function()
-                track:AdjustSpeed(mult)
-                local currentY = root.AssemblyLinearVelocity.Y
-                root.AssemblyLinearVelocity = Vector3.new(
-                    flatForward.X * boostedSpeed,
-                    currentY,
-                    flatForward.Z * boostedSpeed
-                )
-            end)
-            RunService.Heartbeat:Wait()
-        end
-
-        -- 3. Eliminate post-vault landing fatigue delay
-        if Toggles.NoVaultSlowdown and Toggles.NoVaultSlowdown.Value and hum then
-            pcall(function()
-                hum.PlatformStand = false
-                hum.Sit = false
-                if Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value then
-                    if applyPlayerSpeed then applyPlayerSpeed() end
-                else
-                    hum.WalkSpeed = defaultSpeed
-                end
-            end)
-        end
-
-        pcall(function()
-            if vaultStatusLabel then
-                vaultStatusLabel:SetText("Status: Ready")
-            end
-        end)
-    end)
-end
-
-local function bindLocalCharacterVault(char)
-    if not char then return end
-    task.spawn(function()
-        local hum = char:WaitForChild("Humanoid", 4)
-        if not hum then return end
-
-        local animator = hum:WaitForChild("Animator", 4)
-        if animator then
-            animator.AnimationPlayed:Connect(function(track)
-                if not (Toggles.FastVault and Toggles.FastVault.Value) then return end
-
-                if isVaultAnimation(track) then
-                    applyFastVaultFlowstate(track)
-                end
-            end)
-        end
-    end)
-end
-
 local function setupPlayer(player)
     connections[#connections + 1] = player.CharacterAdded:Connect(function(char)
         task.wait(0.2)
@@ -1048,7 +835,6 @@ local function setupPlayer(player)
         end
         if player == LocalPlayer then
             bindLocalCharacterAntiStun(char)
-            bindLocalCharacterVault(char)
             pcall(function()
                 local h = char:FindFirstChildOfClass("Humanoid")
                 if h and h.WalkSpeed > 0 and not (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value) then
@@ -1084,7 +870,6 @@ local function setupPlayer(player)
         end
         if player == LocalPlayer then
             bindLocalCharacterAntiStun(player.Character)
-            bindLocalCharacterVault(player.Character)
             pcall(function()
                 local h = player.Character:FindFirstChildOfClass("Humanoid")
                 if h and h.WalkSpeed > 0 and not (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value) then
@@ -1300,59 +1085,12 @@ local function registerGenerator(genInstance)
     end)
 end
 
-local isScanningGenerators = false
 local function scanGenerators()
-    if isScanningGenerators then return end
-    isScanningGenerators = true
-    task.spawn(function()
-        -- 1. Fast Tagged Discovery
-        pcall(function()
-            for _, tag in ipairs({"Generator", "Gen", "Objective", "Interactable"}) do
-                for _, obj in ipairs(CollectionService:GetTagged(tag)) do
-                    if isGenerator(obj) then
-                        registerGenerator(obj)
-                    end
-                end
-            end
-        end)
-
-        -- 2. Fast Folder Discovery
-        for _, folderName in ipairs({"Map", "Generators", "Interactions", "Objectives", "Props", "Spawns"}) do
-            local f = Workspace:FindFirstChild(folderName)
-            if f then
-                for _, desc in ipairs(f:GetDescendants()) do
-                    if isGenerator(desc) then
-                        registerGenerator(desc)
-                    end
-                end
-            end
+    for _, descendant in ipairs(Workspace:GetDescendants()) do
+        if isGenerator(descendant) then
+            registerGenerator(descendant)
         end
-
-        -- 3. Non-blocking Workspace scan (chunked to ensure silky smooth 200+ FPS without freeze)
-        local count = 0
-        for _, child in ipairs(Workspace:GetChildren()) do
-            if not (child:IsA("Terrain") or child:IsA("Camera")) then
-                if isGenerator(child) then
-                    registerGenerator(child)
-                else
-                    pcall(function()
-                        for _, desc in ipairs(child:GetDescendants()) do
-                            if isGenerator(desc) then
-                                registerGenerator(desc)
-                            end
-                            count = count + 1
-                            if count % 350 == 0 then
-                                task.wait()
-                            end
-                        end
-                    end)
-                end
-            end
-        end
-
-        updateAllGeneratorHighlights()
-        isScanningGenerators = false
-    end)
+    end
 end
 
 ----------------------------------------------------------------------
@@ -1583,7 +1321,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.7 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.8a - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -1605,11 +1343,6 @@ local function isProtectedActionAnim(name)
     end
     return name:find("drop")
         or name:find("vault")
-        or name:find("pallet")
-        or name:find("slide")
-        or name:find("hurdle")
-        or name:find("climb")
-        or name:find("hop")
         or name:find("pull")
         or name:find("repair")
         or name:find("gen")
@@ -3958,7 +3691,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.7)",
+                        Title = "Auto Parry (VD 2.9.8a)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3966,7 +3699,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.7)",
+                        Title = "Auto Parry (VD 2.9.8a)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -4012,56 +3745,6 @@ AutoParryGroupBox:AddButton("Manual Test Parry (Test Stance)", function()
     end
     executeParry("MANUAL_TEST")
 end)
-
-----------------------------------------------------------------------
--- UI ELEMENTS (VAULT TAB)
-----------------------------------------------------------------------
-
--- Left Side: Fast Vault Controls (Flowstate Effect: 50% - 70% Quicker Vault)
-VaultGroupBox:AddToggle("FastVault", {
-    Text = "Fast Vault (Window & Pallet)",
-    Default = false,
-    Tooltip = "Flowstate Effect: Accelerates all window vaults and pallet slides by 50% to 70% with no cooldown.",
-    Callback = function(val)
-        if val then
-            pcall(function()
-                local pct = Options.VaultSpeedBoost and Options.VaultSpeedBoost.Value or 60
-                Library:Notify({
-                    Title = "Fast Vault (VD 2.9.7)",
-                    Description = "Flowstate Effect Active: Vaulting windows & pallets " .. tostring(pct) .. "% quicker!",
-                    Time = 4,
-                })
-            end)
-        end
-    end,
-})
-
-VaultGroupBox:AddDivider()
-
-VaultGroupBox:AddSlider("VaultSpeedBoost", {
-    Text = "Vault Speed Boost",
-    Default = 60,
-    Min = 50,
-    Max = 70,
-    Rounding = 0,
-    Suffix = "%",
-    Compact = false,
-    Tooltip = "Percentage faster vaulting speed (50% to 70% quicker). Flowstate perk is only 20%.",
-})
-
-VaultGroupBox:AddToggle("NoVaultSlowdown", {
-    Text = "No Landing Slowdown",
-    Default = true,
-    Tooltip = "Eliminates post-vault landing fatigue delay so you sprint away instantly upon clearing the obstacle.",
-})
-
--- Right Side: Fast Vault Information
-vaultStatusLabel = VaultInfoGroupBox:AddLabel("Status: Ready")
-VaultInfoGroupBox:AddDivider()
-VaultInfoGroupBox:AddLabel("• Flowstate Effect: Vaults 50% - 70% quicker (Flowstate is 20%).")
-VaultInfoGroupBox:AddLabel("• All Obstacles: Works on both Windows and Pallet slides.")
-VaultInfoGroupBox:AddLabel("• Permanent: Always active with no 50-70s cooldown.")
-VaultInfoGroupBox:AddLabel("• Natural Traversal: Smooth boosted animation & movement.")
 
 ----------------------------------------------------------------------
 -- UI ELEMENTS (OPTIMIZE TAB)
@@ -4225,25 +3908,11 @@ connections[#connections + 1] = Players.PlayerRemoving:Connect(function(player)
     end
 end)
 
--- Heartbeat continuous vault speed enforcement (Maintains 50% - 70% faster playback)
-connections[#connections + 1] = RunService.Heartbeat:Connect(function()
-    if Toggles.FastVault and Toggles.FastVault.Value and LocalPlayer.Character then
-        local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-        local animator = hum and hum:FindFirstChildOfClass("Animator")
-        if animator then
-            local mult = getVaultSpeedMultiplier()
-            for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                if isVaultAnimation(track) then
-                    if math.abs(track.Speed - mult) > 0.05 then
-                        pcall(function() track:AdjustSpeed(mult) end)
-                    end
-                end
-            end
-        end
-    end
+-- Non-blocking generator scan: loads in background so script executes with 0ms freeze
+task.spawn(function()
+    task.wait(0.3)
+    scanGenerators()
 end)
-
-scanGenerators()
 
 connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
     if descendant:IsA("Model") or descendant:IsA("ProximityPrompt") then
@@ -4552,8 +4221,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.7 Loaded Successfully!",
+        Description = "VD 2.9.8a Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.7 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.8a Loaded Successfully! Enjoy!")
 end)

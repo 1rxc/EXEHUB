@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9.3 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.7 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -66,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.3",
+    Footer = "VD 2.9.7",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -840,7 +840,10 @@ local function setupPlayer(player)
         end
     end)
 
-    connections[#connections + 1] = player.CharacterRemoving:Connect(function()
+    connections[#connections + 1] = player.CharacterRemoving:Connect(function(oldChar)
+        if oldChar then
+            pendingCombatChars[oldChar] = nil
+        end
         if playerHighlights[player] then
             pcall(function() playerHighlights[player]:Destroy() end)
             playerHighlights[player] = nil
@@ -1078,12 +1081,59 @@ local function registerGenerator(genInstance)
     end)
 end
 
+local isScanningGenerators = false
 local function scanGenerators()
-    for _, descendant in ipairs(Workspace:GetDescendants()) do
-        if isGenerator(descendant) then
-            registerGenerator(descendant)
+    if isScanningGenerators then return end
+    isScanningGenerators = true
+    task.spawn(function()
+        -- 1. Fast Tagged Discovery
+        pcall(function()
+            for _, tag in ipairs({"Generator", "Gen", "Objective", "Interactable"}) do
+                for _, obj in ipairs(CollectionService:GetTagged(tag)) do
+                    if isGenerator(obj) then
+                        registerGenerator(obj)
+                    end
+                end
+            end
+        end)
+
+        -- 2. Fast Folder Discovery
+        for _, folderName in ipairs({"Map", "Generators", "Interactions", "Objectives", "Props", "Spawns"}) do
+            local f = Workspace:FindFirstChild(folderName)
+            if f then
+                for _, desc in ipairs(f:GetDescendants()) do
+                    if isGenerator(desc) then
+                        registerGenerator(desc)
+                    end
+                end
+            end
         end
-    end
+
+        -- 3. Non-blocking Workspace scan (chunked to ensure silky smooth 60+ FPS without lag)
+        local count = 0
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if not (child:IsA("Terrain") or child:IsA("Camera")) then
+                if isGenerator(child) then
+                    registerGenerator(child)
+                else
+                    pcall(function()
+                        for _, desc in ipairs(child:GetDescendants()) do
+                            if isGenerator(desc) then
+                                registerGenerator(desc)
+                            end
+                            count = count + 1
+                            if count % 350 == 0 then
+                                task.wait()
+                            end
+                        end
+                    end)
+                end
+            end
+        end
+
+        updateAllGeneratorHighlights()
+        isScanningGenerators = false
+    end)
 end
 
 ----------------------------------------------------------------------
@@ -1314,7 +1364,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.3 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.7 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -2238,7 +2288,9 @@ end
 
 local lastParryTick = 0
 local parriedTracks = {}
+local cachedMobileParryButtons = {}
 local combatBoundAnimators = {}
+local pendingCombatChars = {}
 
 local NonDamageActionKeywords = {
     "generator", "pallet", "door", "pickup", "drop", "hook", "unhook",
@@ -2564,21 +2616,28 @@ local function triggerParryInputs(daggerTool, mPos)
         end
     end)
 
-    -- 5. PlayerGui Mobile / Touch Action Buttons (Direct lookup)
+    -- 5. Fast Mobile / Touch Action Button Dispatch (Instant cached lookup - 0ms latency)
     pcall(function()
-        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-        if pg then
-            for _, desc in ipairs(pg:GetDescendants()) do
-                if (desc:IsA("ImageButton") or desc:IsA("TextButton")) and desc.Visible then
-                    local dName = desc.Name:lower()
-                    if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") then
-                        if firesignal then
-                            firesignal(desc.Activated)
-                            firesignal(desc.MouseButton1Click)
-                        elseif desc.Activated then
-                            desc.Activated:Fire()
+        if #cachedMobileParryButtons == 0 then
+            local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+            if pg then
+                for _, desc in ipairs(pg:GetDescendants()) do
+                    if (desc:IsA("ImageButton") or desc:IsA("TextButton")) then
+                        local dName = desc.Name:lower()
+                        if dName:find("parry") or dName:find("guard") or dName:find("block") or dName:find("counter") then
+                            table.insert(cachedMobileParryButtons, desc)
                         end
                     end
+                end
+            end
+        end
+        for _, btn in ipairs(cachedMobileParryButtons) do
+            if btn and btn.Parent and btn.Visible then
+                if firesignal then
+                    firesignal(btn.Activated)
+                    firesignal(btn.MouseButton1Click)
+                elseif btn.Activated then
+                    btn.Activated:Fire()
                 end
             end
         end
@@ -2914,10 +2973,14 @@ bindCombatListeners = function(player, char)
 
     local animator = char:FindFirstChildWhichIsA("Animator", true)
     if not animator then
+        if pendingCombatChars[char] then return end
+        pendingCombatChars[char] = true
+
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             local conn = hum.DescendantAdded:Connect(function(desc)
                 if desc:IsA("Animator") then
+                    pendingCombatChars[char] = nil
                     bindCombatListeners(player, char)
                 end
             end)
@@ -2925,6 +2988,7 @@ bindCombatListeners = function(player, char)
         end
         local conn2 = char.DescendantAdded:Connect(function(desc)
             if desc:IsA("Animator") then
+                pendingCombatChars[char] = nil
                 bindCombatListeners(player, char)
             end
         end)
@@ -2934,6 +2998,7 @@ bindCombatListeners = function(player, char)
 
     if combatBoundAnimators[animator] then return end
     combatBoundAnimators[animator] = true
+    pendingCombatChars[char] = nil
 
     local conn = animator.AnimationPlayed:Connect(function(track)
         checkAndTriggerParry(char, player, track)
@@ -3043,6 +3108,11 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
             if moveDir.Magnitude == 0 then
                 moveDir = hum.MoveDirection
             end
+        end
+
+        -- Support mobile Jump button / Space for upward flight on all devices
+        if hum and (hum.Jump or UserInputService:IsKeyDown(Enum.KeyCode.Space)) then
+            moveDir = moveDir + Vector3.new(0, 1, 0)
         end
 
         local flySpeed = getFlySpeedValue()
@@ -3379,6 +3449,30 @@ MovementGroupBox:AddDivider()
 local FlyToggle = MovementGroupBox:AddToggle("Fly", {
     Text = "Fly",
     Default = false,
+    Callback = function(val)
+        if not val then
+            if flyBodyVelocity then
+                pcall(function() flyBodyVelocity:Destroy() end)
+                flyBodyVelocity = nil
+            end
+            if flyBodyGyro then
+                pcall(function() flyBodyGyro:Destroy() end)
+                flyBodyGyro = nil
+            end
+            local char = LocalPlayer.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            if hum then
+                hum.PlatformStand = false
+            end
+            if root then
+                pcall(function() root.AssemblyLinearVelocity = Vector3.zero end)
+            end
+            if applyPlayerSpeed then
+                applyPlayerSpeed()
+            end
+        end
+    end,
 })
 
 FlyToggle:AddKeyPicker("FlyKeybind", {
@@ -3684,20 +3778,29 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.3)",
-                        Description = "Notice: Parrying Dagger not found in inventory! Auto Parry can only activate when you obtain a Parrying Dagger.",
+                        Title = "Auto Parry (VD 2.9.7)",
+                        Description = "Notice: Parrying Dagger not found in inventory! Auto Parry will activate as soon as you obtain a Parrying Dagger.",
                         Time = 5,
                     })
                 end)
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.3)",
+                        Title = "Auto Parry (VD 2.9.7)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
                 end)
             end
+        else
+            -- Clean ON/OFF: When Auto Parry is turned OFF, immediately clear parry state & release inputs
+            lastParryTick = 0
+            table.clear(parriedTracks)
+            pcall(function()
+                local mPos = UserInputService:GetMouseLocation()
+                VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 1, false, game, 1)
+                VirtualInputManager:SendMouseButtonEvent(mPos.X, mPos.Y, 0, false, game, 1)
+            end)
         end
     end,
 })
@@ -3906,8 +4009,10 @@ end)
 scanGenerators()
 
 connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
-    if isGenerator(descendant) then
-        registerGenerator(descendant)
+    if descendant:IsA("Model") or descendant:IsA("ProximityPrompt") then
+        if isGenerator(descendant) then
+            registerGenerator(descendant)
+        end
     end
 end)
 
@@ -4210,8 +4315,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.3 Loaded Successfully!",
+        Description = "VD 2.9.7 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.3 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.7 Loaded Successfully! Enjoy!")
 end)

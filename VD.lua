@@ -1713,11 +1713,17 @@ pcall(function()
                 local method = getnamecallmethod()
                 if (method == "FireServer" or method == "fireServer") and Toggles.AntiStun and Toggles.AntiStun.Value then
                     local name = tostring(self.Name):lower()
-                    -- NEVER block drop, pallet, interact, repair, or normal player actions
-                    if not (name:find("drop") or name:find("pallet") or name:find("interact") or name:find("action") or name:find("repair")) then
-                        if name:find("stun") or name:find("blind") then
-                            return nil
-                        end
+                    -- NEVER block player actions, tool activations, or weapon shooting
+                    if name:find("drop") or name:find("pallet") or name:find("interact") or name:find("action") or name:find("repair")
+                        or name:find("shoot") or name:find("fire") or name:find("gun") or name:find("twist") or name:find("weapon") or name:find("attack") or name:find("killer") then
+                        return oldNamecall(self, ...)
+                    end
+                    local myChar = LocalPlayer.Character
+                    if myChar and (self:IsDescendantOf(myChar) or self:IsDescendantOf(LocalPlayer)) then
+                        return oldNamecall(self, ...)
+                    end
+                    if name:find("stun") or name:find("blind") then
+                        return nil
                     end
                 end
             end
@@ -1739,6 +1745,14 @@ local function hookStunRemotes()
                     local oldFire = desc.FireServer
                     desc.FireServer = function(self, ...)
                         if Toggles.AntiStun and Toggles.AntiStun.Value then
+                            local sName = tostring(self.Name):lower()
+                            if sName:find("shoot") or sName:find("fire") or sName:find("gun") or sName:find("twist") or sName:find("weapon") or sName:find("killer") then
+                                return oldFire(self, ...)
+                            end
+                            local myChar = LocalPlayer.Character
+                            if myChar and (self:IsDescendantOf(myChar) or self:IsDescendantOf(LocalPlayer)) then
+                                return oldFire(self, ...)
+                            end
                             return nil
                         end
                         return oldFire(self, ...)
@@ -2743,6 +2757,65 @@ end
 
 -- 100% Hit Chance & Aim To Killer: Driven by frame-rate independent camera tracking & character alignment (zero metatable hook, zero stack recursion)
 
+local lastTwistFireTick = 0
+local function fireTwistOfFate()
+    local now = tick()
+    if now - lastTwistFireTick < 0.35 then return false end
+
+    local gun, isEq = getTwistOfFate()
+    if not gun then return false end
+
+    local char = LocalPlayer.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+    -- Equip gun if in backpack
+    if not isEq and hum then
+        pcall(function() hum:EquipTool(gun) end)
+        task.wait(0.08)
+    end
+
+    -- 100% Aim alignment onto Killer
+    local _, killerChar = getActiveKiller()
+    if killerChar then
+        local targetPart = (Options.AimTargetPart and Options.AimTargetPart.Value:find("Head"))
+            and (killerChar:FindFirstChild("Head") or killerChar:FindFirstChild("HumanoidRootPart"))
+            or (killerChar:FindFirstChild("HumanoidRootPart") or killerChar:FindFirstChild("UpperTorso") or killerChar:FindFirstChild("Torso") or killerChar:FindFirstChild("Head"))
+        if targetPart then
+            local cam = Workspace.CurrentCamera
+            if cam then
+                cam.CFrame = CFrame.new(cam.CFrame.Position, targetPart.Position)
+            end
+        end
+    end
+
+    lastTwistFireTick = now
+
+    -- Fire weapon through all execution channels
+    pcall(function() gun:Activate() end)
+
+    pcall(function()
+        local cam = Workspace.CurrentCamera
+        local vp = cam and cam.ViewportSize or Vector2.new(800, 600)
+        local cx, cy = vp.X / 2, vp.Y / 2
+        VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 1)
+        task.defer(function()
+            task.wait(0.05)
+            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 1)
+        end)
+    end)
+
+    if mouse1click then pcall(mouse1click) end
+    pcall(function()
+        VirtualUser:Button1Down(Vector2.new(0, 0))
+        task.defer(function()
+            task.wait(0.05)
+            VirtualUser:Button1Up(Vector2.new(0, 0))
+        end)
+    end)
+
+    return true
+end
+
 local function isAttacker(player, char, track)
     if not player and not char then return false end
     if player == LocalPlayer then return false end
@@ -3235,7 +3308,7 @@ connections[#connections + 1] = RunService.Stepped:Connect(function()
     end
 end)
 
--- Twist of Fate Aim Lock Render Loop (100% Smooth Aim to Killer)
+-- Twist of Fate Aim Lock Render Loop (100% Smooth Aim to Killer & Instant Fire Snap)
 connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
     if not (Toggles.AimToKiller and Toggles.AimToKiller.Value) then return end
     pcall(function()
@@ -3251,17 +3324,23 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
 
         if not targetPart then return end
 
-        local lockMode = Options.AimLockMode and Options.AimLockMode.Value or "When Aiming / Firing"
+        local lockMode = Options.AimLockMode and Options.AimLockMode.Value or "Always When Equipped"
         local shouldAim = false
+        local isFiring = false
+
+        local isRmb, isLmb = false, false
+        pcall(function()
+            isRmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+            isLmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+        end)
+
+        if isLmb then
+            isFiring = true
+        end
 
         if lockMode == "Always When Equipped" then
             shouldAim = true
         else
-            local isRmb, isLmb = false, false
-            pcall(function()
-                isRmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-                isLmb = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
-            end)
             if isRmb or isLmb then
                 shouldAim = true
             else
@@ -3284,26 +3363,26 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
                 local targetPos = targetPart.Position
                 local targetLook = CFrame.new(camPos, targetPos)
 
-                local isSmooth = not (Toggles.SmoothAim and Toggles.SmoothAim.Value == false)
-                if isSmooth then
-                    local speed = Options.AimSmoothSpeed and Options.AimSmoothSpeed.Value or 18
-                    local alpha = math.clamp((dt or 0.016) * speed, 0.08, 0.95)
-                    cam.CFrame = cam.CFrame:Lerp(targetLook, alpha)
-                else
+                if isFiring then
+                    -- When trigger is pulled, instantly lock 100% on target for guaranteed strike
                     cam.CFrame = targetLook
+                else
+                    local isSmooth = not (Toggles.SmoothAim and Toggles.SmoothAim.Value == false)
+                    if isSmooth then
+                        local speed = Options.AimSmoothSpeed and Options.AimSmoothSpeed.Value or 20
+                        -- Exponential decay for 100% framerate-independent, butter smooth tracking
+                        local alpha = 1 - math.exp(-speed * (dt or 0.016))
+                        cam.CFrame = cam.CFrame:Lerp(targetLook, math.clamp(alpha, 0.05, 0.95))
+                    else
+                        cam.CFrame = targetLook
+                    end
                 end
             end
+        end
 
-            local myChar = LocalPlayer.Character
-            local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-            if myRoot then
-                local flatTarget = Vector3.new(targetPart.Position.X, myRoot.Position.Y, targetPart.Position.Z)
-                if (flatTarget - myRoot.Position).Magnitude > 0.5 then
-                    local charTargetRot = CFrame.new(myRoot.Position, flatTarget)
-                    local alphaChar = math.clamp((dt or 0.016) * 14, 0.08, 0.9)
-                    myRoot.CFrame = myRoot.CFrame:Lerp(charTargetRot, alphaChar)
-                end
-            end
+        -- Auto Shoot Killer when aim is locked
+        if Toggles.AutoShoot and Toggles.AutoShoot.Value and shouldAim then
+            fireTwistOfFate()
         end
     end)
 end)
@@ -4124,22 +4203,51 @@ twistStatusLabel = TwistOfFateGroupBox:AddLabel("Twist of Fate: Checking...")
 
 TwistOfFateGroupBox:AddDivider()
 
+TwistOfFateGroupBox:AddToggle("AutoShoot", {
+    Text = "Auto Shoot Killer (100% Hit)",
+    Default = false,
+    Tooltip = "Automatically fires Twist of Fate at the Killer as soon as aim is locked on their hitbox. 100% effortless shot delivery.",
+})
+
+TwistOfFateGroupBox:AddButton("Shoot Killer Now (Fire Weapon)", function()
+    local gun = getTwistOfFate()
+    if not gun then
+        pcall(function()
+            Library:Notify({
+                Title = "Twist of Fate",
+                Description = "Notice: Twist of Fate not found in inventory! Obtain the weapon first.",
+                Time = 4,
+            })
+        end)
+        return
+    end
+    local fired = fireTwistOfFate()
+    if fired then
+        pcall(function()
+            Library:Notify({
+                Title = "Twist of Fate",
+                Description = "Shot Fired! Locked 100% onto Killer!",
+                Time = 3,
+            })
+        end)
+    end
+end)
+
 TwistOfFateGroupBox:AddToggle("SmoothAim", {
     Text = "100% Smooth Aim Tracking",
     Default = true,
-    Tooltip = "Enables 100% buttery smooth interpolated camera tracking. Eliminates screen shake, jitter, and character stutter while keeping aim locked.",
+    Tooltip = "Enables buttery smooth exponential camera tracking. Eliminates screen shake, jitter, and character stutter while keeping aim locked.",
 })
 
 TwistOfFateGroupBox:AddSlider("AimSmoothSpeed", {
     Text = "Aim Smoothness Speed",
-    Default = 18,
+    Default = 20,
     Min = 5,
     Max = 40,
     Rounding = 1,
     Compact = false,
-    Tooltip = "Controls how smoothly the camera glides onto the killer. Default 18 provides 100% buttery smooth tracking at any framerate.",
+    Tooltip = "Controls how smoothly the camera glides onto the killer. Default 20 provides 100% buttery smooth tracking at any framerate.",
 })
-
 
 TwistOfFateGroupBox:AddDropdown("AimTargetPart", {
     Values = { "Torso (100% Hitbox)", "Head" },
@@ -4150,11 +4258,11 @@ TwistOfFateGroupBox:AddDropdown("AimTargetPart", {
 })
 
 TwistOfFateGroupBox:AddDropdown("AimLockMode", {
-    Values = { "When Aiming / Firing", "Always When Equipped" },
-    Default = "When Aiming / Firing",
+    Values = { "Always When Equipped", "When Aiming / Firing" },
+    Default = "Always When Equipped",
     Multi = false,
     Text = "Aim Lock Mode",
-    Tooltip = "When Aiming / Firing locks onto the killer whenever you hold Right Click or fire. Always When Equipped keeps camera locked while the weapon is out.",
+    Tooltip = "Always When Equipped keeps crosshair locked smoothly on Killer whenever the weapon is held. When Aiming / Firing locks on right click or fire.",
 })
 
 ----------------------------------------------------------------------

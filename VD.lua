@@ -1,4 +1,4 @@
--- Violence District | EXE HUB Script VD 2.9.7 (Obsidian UI)
+-- Violence District | EXE HUB Script VD 2.9.8 (Obsidian UI)
 -- Keybinds: EXE HUB (Toggle Menu) | Delete (Kill / Close Script)
 -- Tabs: ESP | Automatic | Player | Camera | Parry | Optimize | Settings
 
@@ -66,7 +66,7 @@ local flyBodyGyro = nil
 -- Create Window
 local Window = Library:CreateWindow({
     Title = "EXE HUB",
-    Footer = "VD 2.9.7",
+    Footer = "VD 2.9.8",
     NotifySide = "Right",
     ShowCustomCursor = false,
     ShowMobileButtons = false,
@@ -1364,7 +1364,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
 end)
 
 ----------------------------------------------------------------------
--- ULTIMATE ANTI STUN SYSTEM (VD 2.9.7 - PALLET & BLIND IMMUNE, NON-BLOCKING)
+-- ULTIMATE ANTI STUN SYSTEM (VD 2.9.8 - PALLET & BLIND IMMUNE, NON-BLOCKING)
 ----------------------------------------------------------------------
 
 local StunKeywords = {
@@ -1453,12 +1453,12 @@ end
 local function getFOVValue()
     if Options.CustomFOVInput and Options.CustomFOVInput.Value then
         local num = tonumber(Options.CustomFOVInput.Value)
-        if num and num >= 30 and num <= 130 then
+        if num and num >= 30 and num <= 120 then
             return num
         end
     end
     if Options.FOVValue and Options.FOVValue.Value then
-        return Options.FOVValue.Value
+        return math.clamp(Options.FOVValue.Value, 30, 120)
     end
     return 70
 end
@@ -3167,7 +3167,7 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
 
                             -- Scan attack animations with early detection margin (up to 22 studs)
                             if d <= math.max(maxDist + 6.0, 22.0) then
-                                local kAnim = pChar:FindFirstChildWhichIsA("Animator", true)
+                                local kAnim = (pChar:FindFirstChildOfClass("Humanoid") and pChar.Humanoid:FindFirstChildOfClass("Animator")) or pChar:FindFirstChildWhichIsA("Animator", true)
                                 if kAnim then
                                     for _, track in ipairs(kAnim:GetPlayingAnimationTracks()) do
                                         if not isTrackParriedRecently(track) and isAttackAnimation(track) then
@@ -3535,11 +3535,11 @@ CameraGroupBox:AddInput("CustomFOVInput", {
     Numeric = true,
     Finished = false,
     Text = "Custom FOV (Input Text)",
-    Tooltip = "Type exact FOV amount (30 to 130)",
-    Placeholder = "Enter FOV (e.g. 70, 90, 110)",
+    Tooltip = "Type exact FOV amount (30 to 120)",
+    Placeholder = "Enter FOV (e.g. 70, 90, 110, 120)",
     Callback = function(val)
         local num = tonumber(val)
-        if num and num >= 30 and num <= 130 then
+        if num and num >= 30 and num <= 120 then
             if Options.FOVValue and Options.FOVValue.Value ~= num then
                 pcall(function() Options.FOVValue:SetValue(num) end)
             end
@@ -3554,7 +3554,7 @@ CameraGroupBox:AddSlider("FOVValue", {
     Text = "FOV Value (Slider)",
     Default = 70,
     Min = 30,
-    Max = 130,
+    Max = 120,
     Rounding = 0,
     Compact = false,
     Callback = function(val)
@@ -3778,7 +3778,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             if not dagger then
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.7)",
+                        Title = "Auto Parry (VD 2.9.8)",
                         Description = "Notice: Parrying Dagger not found in inventory! Auto Parry will activate as soon as you obtain a Parrying Dagger.",
                         Time = 5,
                     })
@@ -3786,7 +3786,7 @@ AutoParryGroupBox:AddToggle("AutoParry", {
             else
                 pcall(function()
                     Library:Notify({
-                        Title = "Auto Parry (VD 2.9.7)",
+                        Title = "Auto Parry (VD 2.9.8)",
                         Description = "Parrying Dagger verified! 100% Protection Active: Instant counter on killer melee attack!",
                         Time = 4,
                     })
@@ -3861,36 +3861,117 @@ connections[#connections + 1] = RunService.RenderStepped:Connect(function()
     end
 end)
 
+local function applyFPSCap(target)
+    local fps = tonumber(target) or 240
+    pcall(function()
+        if setfpscap then setfpscap(fps) end
+        if set_fps_cap then set_fps_cap(fps) end
+        if setmaxfps then setmaxfps(fps) end
+        if setfps then setfps(fps) end
+        if fps >= 360 then
+            if setfpscap then pcall(setfpscap, 0) end
+            if set_fps_cap then pcall(set_fps_cap, 0) end
+        end
+    end)
+    pcall(function()
+        local ugs = UserSettings():GetService("UserGameSettings")
+        if ugs and ugs.FramerateMode then
+            ugs.FramerateMode = Enum.FramerateMode.Maximum
+        end
+    end)
+end
+
 local function applyNetworkOptimizations(enable)
     pcall(function()
         if enable then
             -- 1. Incoming Replication Lag (Set to 0ms for instant client-server synchronization)
             settings().Network.IncomingReplicationLag = 0
             
-            -- 2. Enhanced Send / Receive Rate (Transmits inputs and receives world state at max rate)
-            settings().Network.SendRate = 120
-            settings().Network.ReceiveRate = 120
-            
-            -- 3. Disable Environmental Throttling (Eliminates packet throttling on background objects)
-            settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Disabled
-            settings().Physics.ThrottleAdjustTime = 0
-            
-            -- 4. Maximum FPS Cap (executor level, zero stutter)
-            if setfpscap then
-                setfpscap(999)
-            end
+            -- 2. Enhanced Send / Receive Rate
+            pcall(function() settings().Network.SendRate = 120 end)
+            pcall(function() settings().Network.ReceiveRate = 120 end)
         else
             settings().Network.IncomingReplicationLag = 0
-            settings().Network.SendRate = 60
-            settings().Network.ReceiveRate = 60
-            settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Default
+            pcall(function() settings().Network.SendRate = 60 end)
+            pcall(function() settings().Network.ReceiveRate = 60 end)
         end
     end)
 end
 
+-- Apply initial 240 FPS unlock and network optimizations on boot
+applyFPSCap(240)
 applyNetworkOptimizations(true)
 
--- Left Side: Ping & MS Booster
+-- Left Side: FPS Unlocker (200+ FPS) & Ping Booster
+OptimizeGroupBox:AddToggle("UnlockFPS", {
+    Text = "Unlock FPS (200+ FPS)",
+    Default = true,
+    Tooltip = "Unlocks client FPS beyond 60 up to 200, 240, 360, or Unlimited for high refresh monitors.",
+    Callback = function(val)
+        if val then
+            local target = (Options.FPSCap and Options.FPSCap.Value) or 240
+            applyFPSCap(target)
+        else
+            applyFPSCap(60)
+        end
+    end,
+})
+
+OptimizeGroupBox:AddSlider("FPSCap", {
+    Text = "Max FPS Cap",
+    Default = 240,
+    Min = 60,
+    Max = 360,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = "Set target FPS (e.g. 144, 200, 240, 360).",
+    Callback = function(val)
+        if not Toggles.UnlockFPS or Toggles.UnlockFPS.Value then
+            applyFPSCap(val)
+        end
+    end,
+})
+
+OptimizeGroupBox:AddButton("Preset: 200 FPS (Match Monitor)", function()
+    if Options.FPSCap then Options.FPSCap:SetValue(200) end
+    applyFPSCap(200)
+    pcall(function()
+        Library:Notify({
+            Title = "FPS Optimizer",
+            Description = "Target set to 200 FPS!",
+            Time = 3,
+        })
+    end)
+end)
+
+OptimizeGroupBox:AddButton("Preset: 240 FPS (Ultra Smooth)", function()
+    if Options.FPSCap then Options.FPSCap:SetValue(240) end
+    applyFPSCap(240)
+    pcall(function()
+        Library:Notify({
+            Title = "FPS Optimizer",
+            Description = "Target set to 240 FPS!",
+            Time = 3,
+        })
+    end)
+end)
+
+OptimizeGroupBox:AddButton("Preset: Unlimited (Max Possible)", function()
+    if Options.FPSCap then Options.FPSCap:SetValue(360) end
+    applyFPSCap(360)
+    pcall(function()
+        if setfpscap then pcall(setfpscap, 0) end
+        if set_fps_cap then pcall(set_fps_cap, 0) end
+        Library:Notify({
+            Title = "FPS Optimizer",
+            Description = "FPS Uncapped (Unlimited)! Full GPU/CPU performance active.",
+            Time = 3,
+        })
+    end)
+end)
+
+OptimizeGroupBox:AddDivider()
+
 OptimizeGroupBox:AddToggle("BoostPing", {
     Text = "Boost Ping / MS (Fast Network)",
     Default = true,
@@ -3908,13 +3989,13 @@ OptimizeGroupBox:AddToggle("FastInputLatency", {
 
 OptimizeGroupBox:AddToggle("MemoryOptimizer", {
     Text = "Memory & GC Optimizer",
-    Default = true,
-    Tooltip = "Automatically cleans unused memory cycles in background to prevent frame/ping stutters",
+    Default = false,
+    Tooltip = "Cleans unused memory cycles smoothly without impacting frame rate",
     Callback = function(val)
         if val then
             pcall(function()
-                collectgarbage("setstepmul", 300)
-                collectgarbage("setpause", 100)
+                collectgarbage("setstepmul", 200)
+                collectgarbage("setpause", 200)
             end)
         end
     end,
@@ -3987,7 +4068,8 @@ NetworkMonitorGroupBox:AddButton("Refresh Network Stats", function()
     updateNetworkMonitor()
 end)
 
--- Apply initial network ping boost on boot
+-- Apply initial 200+ FPS unlock & network ping boost on boot
+applyFPSCap(240)
 applyNetworkOptimizations(true)
 
 ----------------------------------------------------------------------
@@ -4274,7 +4356,7 @@ pcall(function()
             end
             if Options.CustomFOVInput and Options.FOVValue then
                 local fovNum = tonumber(Options.CustomFOVInput.Value)
-                if fovNum and fovNum >= 30 and fovNum <= 130 and Options.FOVValue.Value ~= fovNum then
+                if fovNum and fovNum >= 30 and fovNum <= 120 and Options.FOVValue.Value ~= fovNum then
                     Options.FOVValue:SetValue(fovNum)
                 end
             end
@@ -4315,8 +4397,8 @@ end)
 pcall(function()
     Library:Notify({
         Title = "EXE HUB",
-        Description = "VD 2.9.7 Loaded Successfully!",
+        Description = "VD 2.9.8 Loaded Successfully!",
         Time = 6,
     })
-    print("[EXE HUB] VD 2.9.7 Loaded Successfully! Enjoy!")
+    print("[EXE HUB] VD 2.9.8 Loaded Successfully! Enjoy!")
 end)

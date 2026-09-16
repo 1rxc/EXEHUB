@@ -92,6 +92,8 @@ local connections = {}
 local playerHighlights = {}
 local generatorHighlights = {}
 local trackedGenerators = {}
+local boundCharacters = {}
+local pendingAnimatorBinds = {}
 local defaultSpeed = 16
 pcall(function()
     if LocalPlayer.Character then
@@ -936,8 +938,8 @@ local function setupPlayer(player)
             playerHighlights[player] = nil
         end
         if oldChar then
-            boundCharacters[oldChar] = nil
-            pendingAnimatorBinds[oldChar] = nil
+            if boundCharacters then boundCharacters[oldChar] = nil end
+            if pendingAnimatorBinds then pendingAnimatorBinds[oldChar] = nil end
         end
     end)
 
@@ -3391,8 +3393,6 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
     end
 end
 
-local boundCharacters = {}
-local pendingAnimatorBinds = {}
 bindCombatListeners = function(player, char)
     if player == LocalPlayer or not char then return end
     if boundCharacters[char] then return end
@@ -5197,6 +5197,7 @@ Library:OnUnload(function()
     table.clear(parriedTracks)
     table.clear(combatBoundAnimators)
     table.clear(boundCharacters)
+    table.clear(pendingAnimatorBinds)
 end)
 
 ----------------------------------------------------------------------

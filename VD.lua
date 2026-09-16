@@ -1924,7 +1924,9 @@ connections[#connections + 1] = RunService.Heartbeat:Connect(function()
     end
     if root and root.Anchored then isStunned = true end
     if char:GetAttribute("CanMove") == false then isStunned = true end
-    if hum.WalkSpeed < 16 and not (Toggles.Fly and Toggles.Fly.Value) then isStunned = true end
+    if hum.WalkSpeed == 0 and not (Toggles.Fly and Toggles.Fly.Value) and not hum.Sit and char:GetAttribute("CanMove") == false then
+        isStunned = true
+    end
 
     if not isStunned then
         for _, attr in ipairs(StunAttrNames) do
@@ -4780,23 +4782,24 @@ local function applyNetworkOptimizations(enable)
     pcall(function()
         if enable then
             -- 1. Incoming Replication Lag (Set to 0ms for instant client-server synchronization)
-            settings().Network.IncomingReplicationLag = 0
+            pcall(function() settings().Network.IncomingReplicationLag = 0 end)
             
-            -- 2. Enhanced Send / Receive Rate (Transmits inputs and receives world state at max rate)
-            settings().Network.SendRate = 120
-            settings().Network.ReceiveRate = 120
-            
-            -- 3. Disable Environmental Throttling (Eliminates packet throttling on background objects)
-            -- 4. Maximum FPS Cap (executor level, zero stutter, preserve 200+ FPS)
+            -- 2. Disable Environmental Throttling
             pcall(function()
-                if setfpscap then setfpscap(0) end
-                if set_fps_cap then set_fps_cap(0) end
+                settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Disabled
+            end)
+            
+            -- 3. Maximum FPS Cap (Uncapped 240+ FPS, eliminates executor 20 FPS throttling)
+            pcall(function()
+                local targetCap = (Options.FpsCapSlider and Options.FpsCapSlider.Value) or 240
+                if setfpscap then setfpscap(targetCap) end
+                if set_fps_cap then set_fps_cap(targetCap) end
             end)
         else
-            settings().Network.IncomingReplicationLag = 0
-            settings().Network.SendRate = 60
-            settings().Network.ReceiveRate = 60
-            settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Default
+            pcall(function()
+                settings().Network.IncomingReplicationLag = 0
+                settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Default
+            end)
         end
     end)
 end
@@ -4804,6 +4807,22 @@ end
 applyNetworkOptimizations(true)
 
 -- Left Side: Ping & MS Booster
+OptimizeGroupBox:AddSlider("FpsCapSlider", {
+    Text = "Max FPS Limit",
+    Default = 240,
+    Min = 60,
+    Max = 360,
+    Rounding = 0,
+    Compact = true,
+    Tooltip = "Sets executor FPS limit (default: 240 FPS for ultra-smooth gameplay)",
+    Callback = function(val)
+        pcall(function()
+            if setfpscap then setfpscap(val) end
+            if set_fps_cap then set_fps_cap(val) end
+        end)
+    end,
+})
+
 OptimizeGroupBox:AddToggle("BoostPing", {
     Text = "Boost Ping / MS (Fast Network)",
     Default = true,

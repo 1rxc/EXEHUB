@@ -4,20 +4,43 @@
 
 local getgenv = getgenv or function() return _G end
 local env = getgenv()
-env.__EXEHUB_CACHE = env.__EXEHUB_CACHE or {}
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local function safeLoad(path)
-    if env.__EXEHUB_CACHE[path] then
-        return loadstring(env.__EXEHUB_CACHE[path])()
+    -- 1. In-memory global cache across executions
+    local cache = rawget(env, "__EXEHUB_CACHE") or _G.__EXEHUB_CACHE or shared.__EXEHUB_CACHE
+    if not cache then
+        cache = {}
+        if getgenv then pcall(function() env.__EXEHUB_CACHE = cache end) end
+        _G.__EXEHUB_CACHE = cache
+        shared.__EXEHUB_CACHE = cache
     end
+
+    if cache[path] then
+        return loadstring(cache[path])()
+    end
+
+    -- 2. Persistent disk cache across game restarts (0ms instant execution)
+    local diskPath = "EXEHUB_Cache_" .. path:gsub("[/%s]", "_")
+    if isfile and readfile and pcall(isfile, diskPath) and isfile(diskPath) then
+        local fileContent = nil
+        pcall(function() fileContent = readfile(diskPath) end)
+        if fileContent and #fileContent > 50 then
+            cache[path] = fileContent
+            return loadstring(fileContent)()
+        end
+    end
+
+    -- 3. HTTP download with auto disk persistence
     local s, res = pcall(game.HttpGet, game, repo .. path)
     if s and res and #res > 50 then
-        env.__EXEHUB_CACHE[path] = res
+        cache[path] = res
+        if writefile then pcall(writefile, diskPath, res) end
         return loadstring(res)()
     end
     local s2, res2 = pcall(game.HttpGet, game, "https://cdn.jsdelivr.net/gh/deividcomsono/Obsidian@main/" .. path)
     if s2 and res2 and #res2 > 50 then
-        env.__EXEHUB_CACHE[path] = res2
+        cache[path] = res2
+        if writefile then pcall(writefile, diskPath, res2) end
         return loadstring(res2)()
     end
     error("[EXE HUB] Failed to load " .. tostring(path))
@@ -907,10 +930,14 @@ local function setupPlayer(player)
         end
     end)
 
-    connections[#connections + 1] = player.CharacterRemoving:Connect(function()
+    connections[#connections + 1] = player.CharacterRemoving:Connect(function(oldChar)
         if playerHighlights[player] then
             pcall(function() playerHighlights[player]:Destroy() end)
             playerHighlights[player] = nil
+        end
+        if oldChar then
+            boundCharacters[oldChar] = nil
+            pendingAnimatorBinds[oldChar] = nil
         end
     end)
 
@@ -1202,22 +1229,26 @@ local function scanGenerators()
             end
         end)
 
-        -- 2. Fast Folder Discovery (Direct map folders)
-        for _, folderName in ipairs({"Map", "Generators", "Interactions", "Objectives", "Props", "Spawns", "Interactables"}) do
+        -- 2. Fast Folder Discovery (Targeted objective folders only, yields to prevent freeze)
+        local count = 0
+        for _, folderName in ipairs({"Generators", "Interactions", "Objectives", "Interactables"}) do
             local f = Workspace:FindFirstChild(folderName)
             if f then
                 for _, desc in ipairs(f:GetDescendants()) do
                     if isGenerator(desc) then
                         registerGenerator(desc)
                     end
+                    count = count + 1
+                    if count % 150 == 0 then
+                        task.wait()
+                    end
                 end
             end
         end
 
-        -- 3. Chunked Workspace Scan (Yields every 200 items to preserve 200+ FPS with zero hitch)
-        local count = 0
+        -- 3. Chunked Workspace Scan (Yields every 150 items to preserve 200+ FPS with zero hitch)
         for _, child in ipairs(Workspace:GetChildren()) do
-            if not (child:IsA("Terrain") or child:IsA("Camera") or child:IsA("Player") or (child:IsA("Folder") and (child.Name == "Characters" or child.Name == "Players"))) then
+            if not (child:IsA("Terrain") or child:IsA("Camera") or child:IsA("Player") or child.Name == "Map" or child.Name == "Props" or (child:IsA("Folder") and (child.Name == "Characters" or child.Name == "Players"))) then
                 if isGenerator(child) then
                     registerGenerator(child)
                 else
@@ -1227,7 +1258,7 @@ local function scanGenerators()
                                 registerGenerator(desc)
                             end
                             count = count + 1
-                            if count % 200 == 0 then
+                            if count % 150 == 0 then
                                 task.wait()
                             end
                         end
@@ -1816,16 +1847,21 @@ local function applyGameUiPatches()
         end
         local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
         if pg then
-            for _, desc in ipairs(pg:GetDescendants()) do
-                if desc.Name == "Browse_loadout_killer" or desc.Name == "Browse_loadout_survivor" then
-                    patchKillerLoadoutItems(desc)
-                elseif desc.Name == "Results" then
-                    patchResultsGui(desc)
-                end
+            -- Instant O(1) checks for Results ScreenGui
+            local res = pg:FindFirstChild("Results")
+            if res then
+                patchResultsGui(res)
             end
-            for _, child in ipairs(pg:GetChildren()) do
-                if child.Name == "Results" then
-                    patchResultsGui(child)
+
+            -- Instant O(1) checks for Spectator inventory frames
+            local spectator = pg:FindFirstChild("Spectator")
+            if spectator then
+                local inv = spectator:FindFirstChild("Inventory")
+                if inv then
+                    local bk = inv:FindFirstChild("Browse_loadout_killer")
+                    if bk then patchKillerLoadoutItems(bk) end
+                    local bs = inv:FindFirstChild("Browse_loadout_survivor")
+                    if bs then patchKillerLoadoutItems(bs) end
                 end
             end
         end
@@ -3356,12 +3392,16 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
 end
 
 local boundCharacters = {}
+local pendingAnimatorBinds = {}
 bindCombatListeners = function(player, char)
     if player == LocalPlayer or not char then return end
     if boundCharacters[char] then return end
 
     local animator = char:FindFirstChildWhichIsA("Animator", true)
     if not animator then
+        if pendingAnimatorBinds[char] then return end
+        pendingAnimatorBinds[char] = true
+
         local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
             local conn = hum.DescendantAdded:Connect(function(desc)
@@ -4912,13 +4952,16 @@ task.defer(function()
     end
 end)
 
--- Non-blocking generator scan: gently loads in background with chunked yielding
+-- Lazy generator scan: only scans if generator ESP is actually enabled by the user
 task.spawn(function()
-    task.wait(0.5)
-    scanGenerators()
+    task.wait(1)
+    if Toggles.HighlightGenerators and Toggles.HighlightGenerators.Value then
+        scanGenerators()
+    end
 end)
 
 connections[#connections + 1] = Workspace.DescendantAdded:Connect(function(descendant)
+    if not (Toggles.HighlightGenerators and Toggles.HighlightGenerators.Value) then return end
     if descendant:IsA("Model") or descendant:IsA("ProximityPrompt") then
         if isGenerator(descendant) then
             registerGenerator(descendant)
@@ -4988,11 +5031,6 @@ task.spawn(function()
                 else
                     daggerStatusLabel:SetText("Dagger: Not in Inventory (Cannot Activate)")
                 end
-            end
-
-            -- Apply Game UI bug fixes
-            if applyGameUiPatches then
-                applyGameUiPatches()
             end
 
             -- Update Network & Ping Stats in Optimize Tab

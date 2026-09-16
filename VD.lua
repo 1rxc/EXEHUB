@@ -1651,9 +1651,9 @@ local function cleanStunEffects(char)
         root.Anchored = false
     end
 
-    -- 3. Restore WalkSpeed if zeroed or slowed by stun
+    -- 3. Restore WalkSpeed if zeroed by stun
     local targetSpeed = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value and getSpeedValue()) or defaultSpeed
-    if hum.WalkSpeed < 16 then
+    if hum.WalkSpeed == 0 then
         hum.WalkSpeed = targetSpeed
     end
 
@@ -3101,7 +3101,6 @@ local function checkAndTriggerParry(killerChar, killerPlayer, track)
 
     local myPos = myRoot.Position
     local kPos = kRoot.Position
-    local dist = (kPos - myPos).Magnitude
 
     -- 4. Elevation Check: Filter out extreme vertical distances (e.g. different floor/roof > 8.0 studs)
     local yDiff = math.abs(kPos.Y - myPos.Y)
@@ -3265,29 +3264,32 @@ end
 -- SPEED ADJUST, NOCLIP & FLY SYSTEMS
 ----------------------------------------------------------------------
 
--- Noclip Physics Handler
+-- Noclip Physics Handler (Zero overhead when disabled)
 connections[#connections + 1] = RunService.Stepped:Connect(function()
-    if Toggles.Noclip and Toggles.Noclip.Value then
-        local char = LocalPlayer.Character
-        if char then
-            for _, part in ipairs(char:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
+    if not (Toggles.Noclip and Toggles.Noclip.Value) then return end
+    local char = LocalPlayer.Character
+    if char then
+        for _, part in ipairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
             end
         end
     end
 end)
 
--- Speed Adjust & Fly Render Loop
+-- Speed Adjust & Fly Render Loop (Exits immediately when neither is active for zero per-frame overhead)
 connections[#connections + 1] = RunService.RenderStepped:Connect(function(dt)
+    local isFlyOn = (Toggles.Fly and Toggles.Fly.Value == true)
+    local isSpeedOn = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value == true)
+    if not isFlyOn and not isSpeedOn then return end
+
     local char = LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     local root = char:FindFirstChild("HumanoidRootPart")
 
     -- Speed Adjust
-    if not (Toggles.Fly and Toggles.Fly.Value) then
+    if not isFlyOn then
         local isSpeedOn = (Toggles.SpeedAdjust and Toggles.SpeedAdjust.Value == true)
         if isSpeedOn then
             local targetSpeed = getSpeedValue()
@@ -4300,8 +4302,8 @@ end)
 ServerQuickGroupBox:AddDivider()
 
 ServerQuickGroupBox:AddLabel("Current Place ID: " .. tostring(game.PlaceId))
-local currentJobLabel = ServerQuickGroupBox:AddLabel("Current Job: " .. tostring(game.JobId):sub(1, 10) .. "...")
-local currentPlayersLabel = ServerQuickGroupBox:AddLabel("Current Players: " .. tostring(#Players:GetPlayers()))
+ServerQuickGroupBox:AddLabel("Current Job: " .. tostring(game.JobId):sub(1, 10) .. "...")
+ServerQuickGroupBox:AddLabel("Current Players: " .. tostring(#Players:GetPlayers()))
 
 -- Right Side: Dedicated 0-1 Player Server Browser
 serverStatusLabel = ServerBrowserGroupBox:AddLabel("Status: Click Refresh to Scan 0-1 Players")
@@ -4410,20 +4412,7 @@ end)
 -- UI ELEMENTS (OPTIMIZE TAB)
 ----------------------------------------------------------------------
 
-local currentMeasuredFps = 60
 local currentMeasuredPing = 0
-local frameCounter = 0
-local lastFpsCheckTime = tick()
-
-connections[#connections + 1] = RunService.RenderStepped:Connect(function()
-    frameCounter = frameCounter + 1
-    local now = tick()
-    if now - lastFpsCheckTime >= 0.5 then
-        currentMeasuredFps = math.floor(frameCounter / math.max(0.001, (now - lastFpsCheckTime)))
-        frameCounter = 0
-        lastFpsCheckTime = now
-    end
-end)
 
 local function applyNetworkOptimizations(enable)
     pcall(function()
@@ -4552,7 +4541,8 @@ local function updateNetworkMonitor()
             livePingLabel:SetText("Current Ping : " .. tostring(currentMeasuredPing) .. " ms")
         end
         if liveFPSLabel and liveFPSLabel.SetText then
-            liveFPSLabel:SetText("Current FPS : " .. tostring(currentMeasuredFps))
+            local currentFps = math.floor(Workspace:GetRealPhysicsFPS())
+            liveFPSLabel:SetText("Current FPS : " .. tostring(currentFps))
         end
         if liveMemoryLabel and liveMemoryLabel.SetText then
             local mem = math.floor(gcinfo() / 1024)
@@ -4626,8 +4616,8 @@ task.spawn(function()
                 updateAllGeneratorHighlights()
             end
 
-            -- Ensure combat listeners are always active on all players
-            if bindCombatListeners then
+            -- Ensure combat listeners are always active on all players (only if AutoParry is active)
+            if bindCombatListeners and Toggles.AutoParry and Toggles.AutoParry.Value then
                 for _, p in ipairs(Players:GetPlayers()) do
                     if p ~= LocalPlayer and p.Character then
                         bindCombatListeners(p, p.Character)
@@ -4635,9 +4625,14 @@ task.spawn(function()
                 end
             end
 
-            -- Update Live Inspector UI
-            if updateLiveInspector then
+            -- Update Live Inspector UI only if a target is actively selected
+            if updateLiveInspector and currentTargetPlayer then
                 updateLiveInspector()
+            end
+
+            -- Soft incremental GC slice if Memory Optimizer is active (prevents major GC stutter)
+            if Toggles.MemoryOptimizer and Toggles.MemoryOptimizer.Value then
+                pcall(function() collectgarbage("step", 50) end)
             end
 
             -- Update Parrying Dagger Status

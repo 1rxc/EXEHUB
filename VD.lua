@@ -4788,13 +4788,6 @@ local function applyNetworkOptimizations(enable)
             pcall(function()
                 settings().Physics.PhysicsEnvironmentalThrottle = Enum.EnviromentalPhysicsThrottle.Disabled
             end)
-            
-            -- 3. Maximum FPS Cap (Uncapped 240+ FPS, eliminates executor 20 FPS throttling)
-            pcall(function()
-                local targetCap = (Options.FpsCapSlider and Options.FpsCapSlider.Value) or 240
-                if setfpscap then setfpscap(targetCap) end
-                if set_fps_cap then set_fps_cap(targetCap) end
-            end)
         else
             pcall(function()
                 settings().Network.IncomingReplicationLag = 0
@@ -4807,22 +4800,6 @@ end
 applyNetworkOptimizations(true)
 
 -- Left Side: Ping & MS Booster
-OptimizeGroupBox:AddSlider("FpsCapSlider", {
-    Text = "Max FPS Limit",
-    Default = 240,
-    Min = 60,
-    Max = 360,
-    Rounding = 0,
-    Compact = true,
-    Tooltip = "Sets executor FPS limit (default: 240 FPS for ultra-smooth gameplay)",
-    Callback = function(val)
-        pcall(function()
-            if setfpscap then setfpscap(val) end
-            if set_fps_cap then set_fps_cap(val) end
-        end)
-    end,
-})
-
 OptimizeGroupBox:AddToggle("BoostPing", {
     Text = "Boost Ping / MS (Fast Network)",
     Default = true,
